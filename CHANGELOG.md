@@ -22,60 +22,31 @@ All notable changes to this project will be documented here.
 - **Windows backend rewritten on top of `pywin32`.** Earlier versions
   shelled out to `powershell -NoProfile -Command "..."` once per MCP
   tool call. That architecture had two structural defects: (1) a
-  cross-process read-after-write race where the OLE clipboard chain
-  needed to fully propagate a `SetDataObject(.., copy=true)` snapshot
-  from the exiting writer process before a fresh reader subprocess
-  could see it (the silent-no-op symptom captured by mc-005, mc-009,
-  and mc-020 in the Windows e2e suite), and (2) PowerShell stdin /
-  stdout codepage transcoding that lossy-ified non-ASCII codepoints.
-  The new backend in `mcp_clipboard/clipboard_win32.py` keeps clipboard
-  ownership inside the long-lived MCP-server Python process and uses
-  the standard Win32 `OpenClipboard` / `EmptyClipboard` /
-  `SetClipboardData` / `GetClipboardData` / `EnumClipboardFormats` /
-  `RegisterClipboardFormat` / `CloseClipboard` API directly via
-  `pywin32`. No subprocess spawn, no codepage transcoding, no cross-
-  process race, no per-op PowerShell cold-start. text/plain uses
-  `CF_UNICODETEXT` (UTF-16 native); text/html / text/rtf / image/svg+xml
-  use registered custom formats with UTF-8 byte payloads. The
-  encoding fixes from #131 (input) and #142 / #132 (output) become
-  structurally unnecessary — there is no console code page in the
-  read or write path. `pywin32` is added as a Windows-only dependency
-  (`sys_platform == 'win32'` marker). Phase 1 covers text formats
-  (text/plain, text/html, text/rtf, image/svg+xml). Phase 2 (a
-  follow-up PR) will port `_windows_read_image` and `_windows_write_image`
-  to `pywin32` with DIB ↔ PNG conversion. Closes #143.
-- **Windows writes go through `OleSetClipboard` + `OleFlushClipboard`
-  instead of raw `SetClipboardData`, dispatched onto a dedicated COM
-  worker thread.** MSDN is explicit that "sharing non-standard
-  clipboard data formats between processes requires using the
-  OleSetClipboard API, as SetClipboardData alone is not enough."
-  CD-Windows live QA on PR #146 confirmed: raw `SetClipboardData` for
-  registered custom formats (image/svg+xml, HTML Format) silently
-  no-ops when the prior clipboard owner is a foreign process — the
-  call returns success but `list_formats` afterward shows the prior
-  state surviving (the same `mc-005 / mc-017 / mc-020 / mc-028 / mc-201`
-  signature from the Windows e2e suite that the message-only-window
-  fix did not deterministically close). The write path now publishes
-  a Python-implemented `IDataObject` via `pythoncom.OleSetClipboard`
-  (the same path .NET's `Clipboard.SetDataObject` and PowerShell's
-  `Set-Clipboard` take), then immediately calls
-  `pythoncom.OleFlushClipboard` to render the formats into HGLOBAL
-  handles and release the data-object pointer — clipboard contents
-  persist without our process needing to pump messages. Multi-format
-  writes (`clipboard_copy_markdown`) publish a single IDataObject
-  offering all formats; the flush is one atomic Win32 transaction.
-  A dedicated daemon worker thread (`_ClipboardWorker`) owns the OLE
-  apartment for the process's lifetime: CoInitializeEx'd to STA via a
-  direct `ole32.CoInitializeEx` call through ctypes on thread start,
-  then services a queue of write requests from asyncio dispatchers via
-  `concurrent.futures.Future`s. Earlier attempts that initialized COM
-  on each calling thread (via `pythoncom.CoInitializeEx` and via
-  ctypes-direct `ole32.CoInitializeEx`) all showed
-  `OleSetClipboard` raising `CO_E_NOTINITIALIZED` despite the just-prior
-  successful init call — the apartment state on the pytest main thread
-  was being lost between init and the OLE call. Moving OLE work to a
-  dedicated thread that never relinquishes its apartment sidesteps the
-  instability entirely.
+  cross-process read-after-write race where a fresh reader subprocess
+  could miss a snapshot the exiting writer subprocess had just placed
+  on the clipboard (the silent-no-op symptom captured by mc-005,
+  mc-009, and mc-020 in the Windows e2e suite), and (2) PowerShell
+  stdin / stdout codepage transcoding that lossy-ified non-ASCII
+  codepoints. The new backend in `mcp_clipboard/clipboard_win32.py`
+  keeps clipboard access inside the long-lived MCP-server Python
+  process and calls the standard Win32 clipboard API directly via
+  `pywin32`, the same pattern Chromium, Qt, clipboard-win, and
+  pyperclip use. Writes are `OpenClipboard` -> `EmptyClipboard` -> per
+  format `GlobalAlloc(GMEM_MOVEABLE)` + `GlobalLock` / copy /
+  `GlobalUnlock` + `SetClipboardData` -> `CloseClipboard`, so
+  multi-format writes (`clipboard_copy_markdown`) land in one
+  transaction. Reads use `GetClipboardData` / `EnumClipboardFormats`.
+  No subprocess spawn, no codepage transcoding, no per-op PowerShell
+  cold start. text/plain uses `CF_UNICODETEXT` (UTF-16 native);
+  text/html / text/rtf / image/svg+xml use registered custom formats
+  with UTF-8 byte payloads. The encoding fixes from #131 (input) and
+  #142 / #132 (output) become structurally unnecessary, since there is
+  no console code page in the read or write path. `pywin32` is added
+  as a Windows-only dependency (`sys_platform == 'win32'` marker).
+  Phase 1 covers text formats (text/plain, text/html, text/rtf,
+  image/svg+xml); image read/write stays on PowerShell until Phase 2
+  (#147) ports it with DIB <-> PNG conversion. Closes #143.
+- **Bump github-actions group: actions/checkout 6→7, actions/create-github-app-token 3.1.1→3.2.0, actions/setup-python 6→7, codecov/codecov-action 6→7** (#152)
 
 ### Fixed
 - Windows: added a control script (`dev/windows-clipboard-observers.ps1`)
@@ -93,29 +64,7 @@ All notable changes to this project will be documented here.
   We empirically confirmed the script eliminates the symptom: with
   observers off the QEMU e2e suite goes from 24/28 PASS to 27/28
   PASS with zero first-attempt race recoveries.
-- Windows: replaced the entire `OleSetClipboard` + `OleFlushClipboard`
-  write path with the canonical raw-`SetClipboardData` pattern used by
-  Chromium (`ui/base/clipboard/clipboard_win.cc`), pyperclip, and pyclip.
-  The OLE path created a hidden `CLIPBRDWNDCLASS` window on a worker
-  thread that had no message pump; consumers (clipboard managers,
-  OneDrive shell extensions, antivirus) that walked our registered
-  custom formats hit the documented 30-second `WM_RENDERFORMAT` timeout
-  and synthesized their own clipboard copy in self-defense, presenting
-  to us as "our write was silently overwritten" (the PR #146 e2e flake
-  on commits 8535045 / 3078f35 / ec6d6a5 / 6837c36). The new write path
-  is `OpenClipboard(owner_hwnd)` -> `EmptyClipboard()` -> per format:
-  `GlobalAlloc(GMEM_MOVEABLE, len)` + `GlobalLock` + `memcpy` +
-  `GlobalUnlock` + `SetClipboardData(fmt, handle)` -> `CloseClipboard()`.
-  No OLE, no `IDataObject`, no hidden window, no delayed rendering, no
-  message pump dependency, no post-write verify, no retry on
-  `SetClipboardData` itself. The `GMEM_MOVEABLE` flag is explicit (per
-  MSDN, `SetClipboardData` silently rejects `GMEM_FIXED` handles -- the
-  documented cause of the silent-no-op symptom class on the pre-OLE
-  attempt). Removes roughly 400 lines of OLE machinery
-  (`_ClipboardDataObject` IDataObject stub, `_ClipboardWorker` STA
-  worker thread, `_ole32_initialize`, `_ole_set_clipboard_with_retry`,
-  `_ole_write_on_worker`, `_get_clipboard_sequence_number`,
-  `_wait_for_clipboard_quiescent`, the 5-attempt verify-retry loop).
+
 
 ## [2.6.2] - 2026-10-07
 
