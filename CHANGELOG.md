@@ -4,6 +4,10 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Bump github-actions group: actions/checkout 6→7, actions/create-github-app-token 3.1.1→3.2.0, actions/setup-python 6→7, codecov/codecov-action 6→7** (#152)
+
 ## [2.6.2] - 2026-10-07
 
 ### Added
