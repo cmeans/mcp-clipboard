@@ -4,6 +4,8 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+## [2.6.2] - 2026-10-07
+
 ### Added
 - New `clipboard_version` MCP tool that returns the running
   mcp-clipboard package version. Diagnostic surface for hosts and
