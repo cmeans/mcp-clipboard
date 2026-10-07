@@ -58,7 +58,11 @@ a private channel.
 **In scope**
 
 - Argument smuggling or unsafe subprocess invocation via clipboard
-  content (`wl-paste`, `xclip`, `pbpaste`, `osascript`, PowerShell).
+  content (`wl-paste`, `xclip`, `pbpaste`, `osascript`, PowerShell for
+  the Windows image read/write paths). Issues in pywin32-based code
+  paths (Windows text/plain, text/html, text/rtf, image/svg+xml) are
+  also in scope; those bypass subprocess invocation entirely and call
+  the Win32 clipboard API directly, so the surface differs.
 - Output-injection issues in any of the supported output formats
   (markdown, json, csv, slack, jira, confluence, html, notion).
 - HTML output producing markup that could execute in a browser when

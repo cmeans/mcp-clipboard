@@ -689,8 +689,19 @@ async def test_paste_empty_clipboard_no_binary():
 
 
 def _fake_runtime_dir(tmp_path, sockets=("wayland-0",)):
-    """Create fake Wayland socket files in a temp dir and return the path."""
+    """Create fake Wayland socket files in a temp dir and return the path.
+
+    Wayland is Linux-only; AF_UNIX is unavailable on Windows and macOS's
+    pytest tmp_path under /private/var/folders/... overruns the AF_UNIX
+    104-byte path limit. Skip the calling test cleanly on non-Linux rather
+    than producing a false failure for Linux-specific code paths."""
     import socket
+    import sys as _sys
+
+    if _sys.platform != "linux":
+        import pytest as _pytest
+
+        _pytest.skip("Wayland AF_UNIX socket helpers are Linux-only")
 
     for name in sockets:
         sock_path = tmp_path / name
@@ -738,6 +749,42 @@ def test_find_wayland_display_ignores_lock_files(tmp_path):
     (tmp_path / "wayland-0.lock").touch()
     with patch.dict("os.environ", {"XDG_RUNTIME_DIR": str(tmp_path)}, clear=False):
         result = _find_wayland_display()
+    assert result is None
+
+
+def test_find_wayland_display_returns_none_on_iterdir_oserror(tmp_path):
+    """If iterdir() raises OSError (e.g. permission denied on the runtime
+    directory) _find_wayland_display swallows the error and returns None
+    rather than propagating an exception out to the dispatch layer.
+    Covers the bare-except OSError handler that runs when the directory
+    is technically a directory but is unreadable."""
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    if _sys.platform != "linux":
+        pytest.skip("Wayland runtime-dir tests are Linux-only")
+
+    with patch.dict("os.environ", {"XDG_RUNTIME_DIR": str(tmp_path)}, clear=False):
+        with patch.object(_Path, "iterdir", side_effect=OSError("Permission denied")):
+            result = _find_wayland_display()
+    assert result is None
+
+
+def test_wayland_env_returns_none_when_runtime_dir_is_missing():
+    """_wayland_env's `if not Path(xdg_runtime).is_dir(): return None` --
+    the path computed from $XDG_RUNTIME_DIR (or /run/user/<uid> fallback)
+    does not exist on disk, so wl-paste cannot connect and we return None
+    rather than handing back a broken env dict."""
+    with patch.dict(
+        "os.environ",
+        {"XDG_RUNTIME_DIR": "/nonexistent-xdg-runtime-dir"},
+        clear=False,
+    ):
+        # WAYLAND_DISPLAY explicitly absent so we don't take the early
+        # both-set return at the top of _wayland_env.
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("WAYLAND_DISPLAY", None)
+            result = _wayland_env()
     assert result is None
 
 
@@ -947,96 +994,58 @@ async def test_macos_list_formats_deduplicates_mime_types():
 # ---------------------------------------------------------------------------
 
 
+# Windows backend uses the pywin32 win32clipboard wrapper directly via
+# clipboard_win32.py. These tests mock the wrapper module so they pass on
+# Linux CI; integration tests that exercise real pywin32 against a live
+# Windows clipboard are gated by @pytest.mark.integration.
+
+
+@pytest.mark.parametrize(
+    "mime_type",
+    ["text/plain", "text/html", "text/rtf", "image/svg+xml"],
+)
 @pytest.mark.asyncio
-async def test_windows_read_html():
-    """_windows_read uses PowerShell HTML clipboard for text/html."""
-    with patch(
-        "mcp_clipboard.clipboard._run", new_callable=AsyncMock, return_value="<b>hi</b>"
-    ) as mock_run:
-        result = await _windows_read("text/html")
+async def test_windows_read_dispatches_to_win32_wrapper(mime_type):
+    """_windows_read forwards each supported MIME to clipboard_win32.read_text."""
+    with patch("mcp_clipboard.clipboard_win32.read_text", return_value="payload") as mock_read:
+        result = await _windows_read(mime_type)
 
-    assert result == "<b>hi</b>"
-    cmd = mock_run.call_args[0][0]
-    assert cmd[0] == "powershell"
-    assert "Html" in cmd[-1]
-
-
-@pytest.mark.asyncio
-async def test_windows_read_plain():
-    """_windows_read uses Get-Clipboard for text/plain."""
-    with patch(
-        "mcp_clipboard.clipboard._run", new_callable=AsyncMock, return_value="hello"
-    ) as mock_run:
-        result = await _windows_read("text/plain")
-
-    assert result == "hello"
-    cmd = mock_run.call_args[0][0]
-    assert "Get-Clipboard" in cmd[-1]
+    assert result == "payload"
+    mock_read.assert_called_once_with(mime_type)
 
 
 @pytest.mark.asyncio
 async def test_windows_read_unsupported_returns_empty():
-    """_windows_read returns empty string for unsupported MIME types."""
-    result = await _windows_read("text/xml")
+    """_windows_read returns empty string for unsupported MIME types
+    without ever calling the win32 wrapper."""
+    with patch("mcp_clipboard.clipboard_win32.read_text") as mock_read:
+        result = await _windows_read("text/xml")
+
     assert result == ""
+    mock_read.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_windows_read_rtf():
-    """_windows_read uses PowerShell RTF clipboard for text/rtf."""
-    rtf_content = r"{\rtf1\ansi Hello, {\b world}!}"
+async def test_windows_read_wraps_win32_errors_as_clipboard_error():
+    """Errors from the win32 wrapper surface as ClipboardError so the rest
+    of the dispatch layer (_read_clipboard_content) can handle them
+    uniformly with the other backends."""
     with patch(
-        "mcp_clipboard.clipboard._run", new_callable=AsyncMock, return_value=rtf_content
-    ) as mock_run:
-        result = await _windows_read("text/rtf")
-
-    assert result == rtf_content
-    cmd = mock_run.call_args[0][0]
-    assert cmd[0] == "powershell"
-    assert "Rtf" in cmd[-1]
-
-
-@pytest.mark.parametrize("mime_type", ["text/plain", "text/html", "text/rtf", "image/svg+xml"])
-@pytest.mark.asyncio
-async def test_windows_read_sets_utf8_output_encoding(mime_type):
-    """Every PowerShell-backed _windows_read branch must prepend
-    [Console]::OutputEncoding = UTF8 so non-ASCII codepoints survive the
-    return trip to Python. Without this, PowerShell's stdout encoder defaults
-    to the parent's console code page (typically CP1252 on Windows), which
-    transliterates em dash to hyphen, ellipsis to period, and substitutes
-    unmappable codepoints (CJK, Arabic, emoji) with U+003F. Regression
-    guard for #142 / #132. Also asserts the preamble precedes any
-    Get-Clipboard or GetData invocation: the assignment has to take effect
-    before PowerShell writes anything to stdout, so a future refactor that
-    keeps the preamble but moves it past the read call would be a silent
-    regression."""
-    with patch("mcp_clipboard.clipboard._run", new_callable=AsyncMock, return_value="") as mock_run:
-        await _windows_read(mime_type)
-
-    cmd = mock_run.call_args[0][0]
-    script = cmd[-1]
-    preamble = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8"
-    assert preamble in script, (
-        f"PowerShell script for {mime_type} is missing the UTF-8 stdout preamble; "
-        f"non-ASCII codepoints will be lossy on round-trip. Script: {script!r}"
-    )
-    preamble_pos = script.index(preamble)
-    # text/plain uses Get-Clipboard; the other branches use Clipboard::GetData.
-    read_marker = "Get-Clipboard" if mime_type == "text/plain" else "Clipboard]::GetData"
-    read_pos = script.index(read_marker)
-    assert preamble_pos < read_pos, (
-        f"PowerShell script for {mime_type} has the UTF-8 preamble after the "
-        f"{read_marker} call; the encoding assignment must take effect before "
-        f"any clipboard read writes to stdout. Script: {script!r}"
-    )
+        "mcp_clipboard.clipboard_win32.read_text",
+        side_effect=RuntimeError("OpenClipboard failed"),
+    ):
+        with pytest.raises(ClipboardError, match="Windows clipboard read failed"):
+            await _windows_read("text/plain")
 
 
 @pytest.mark.asyncio
 async def test_windows_list_formats_maps_names_to_mime():
-    """_windows_list_formats maps known Windows format names to MIME types and
+    """_windows_list_formats maps known Windows native names to MIME types and
     deduplicates collisions (Text and UnicodeText both map to text/plain)."""
-    raw_output = "HTML Format\nText\nUnicodeText\nPNG\n"
-    with patch("mcp_clipboard.clipboard._run", new_callable=AsyncMock, return_value=raw_output):
+    with patch(
+        "mcp_clipboard.clipboard_win32.list_formats",
+        return_value=["HTML Format", "Text", "UnicodeText", "PNG"],
+    ):
         result = await _windows_list_formats()
 
     assert result == ["text/html", "text/plain", "image/png"]
@@ -1045,8 +1054,10 @@ async def test_windows_list_formats_maps_names_to_mime():
 @pytest.mark.asyncio
 async def test_windows_list_formats_passthrough_unknown():
     """_windows_list_formats passes through unknown format names as-is."""
-    raw_output = "HTML Format\nSystem.String\n"
-    with patch("mcp_clipboard.clipboard._run", new_callable=AsyncMock, return_value=raw_output):
+    with patch(
+        "mcp_clipboard.clipboard_win32.list_formats",
+        return_value=["HTML Format", "System.String"],
+    ):
         result = await _windows_list_formats()
 
     assert result == ["text/html", "System.String"]
@@ -1055,11 +1066,24 @@ async def test_windows_list_formats_passthrough_unknown():
 @pytest.mark.asyncio
 async def test_windows_list_formats_deduplicates_mime_types():
     """Multiple native names mapping to the same MIME collapse to one entry."""
-    raw_output = "Text\nUnicodeText\nText\nHTML Format\n"
-    with patch("mcp_clipboard.clipboard._run", new_callable=AsyncMock, return_value=raw_output):
+    with patch(
+        "mcp_clipboard.clipboard_win32.list_formats",
+        return_value=["Text", "UnicodeText", "Text", "HTML Format"],
+    ):
         result = await _windows_list_formats()
 
     assert result == ["text/plain", "text/html"]
+
+
+@pytest.mark.asyncio
+async def test_windows_list_formats_wraps_win32_errors_as_clipboard_error():
+    """Errors from the win32 wrapper surface as ClipboardError."""
+    with patch(
+        "mcp_clipboard.clipboard_win32.list_formats",
+        side_effect=RuntimeError("OpenClipboard failed"),
+    ):
+        with pytest.raises(ClipboardError, match="Windows clipboard list failed"):
+            await _windows_list_formats()
 
 
 # ---------------------------------------------------------------------------
@@ -1608,15 +1632,24 @@ async def test_macos_write():
 
 
 @pytest.mark.asyncio
-async def test_windows_write():
-    """_windows_write pipes content to PowerShell Set-Clipboard."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
+async def test_windows_write_dispatches_to_win32_wrapper():
+    """_windows_write forwards plain text to clipboard_win32.write_text
+    with mime_type='text/plain' (CF_UNICODETEXT under the hood)."""
+    with patch("mcp_clipboard.clipboard_win32.write_text") as mock_write:
         await _windows_write("hello")
 
-    cmd = mock.call_args[0][0]
-    assert cmd[0] == "powershell"
-    data = mock.call_args[0][1]
-    assert data == b"hello"
+    mock_write.assert_called_once_with("hello", "text/plain")
+
+
+@pytest.mark.asyncio
+async def test_windows_write_wraps_win32_errors_as_clipboard_error():
+    """Errors from the win32 wrapper surface as ClipboardError."""
+    with patch(
+        "mcp_clipboard.clipboard_win32.write_text",
+        side_effect=RuntimeError("OpenClipboard failed"),
+    ):
+        with pytest.raises(ClipboardError, match="Windows clipboard write failed"):
+            await _windows_write("hello")
 
 
 @pytest.mark.asyncio
@@ -1988,8 +2021,23 @@ async def test_run_binary_exit_code_2_raises():
 
 @pytest.mark.asyncio
 async def test_run_binary_returns_raw_bytes():
-    """_run_binary returns raw bytes from stdout."""
-    result = await _run_binary(["printf", "\\x89PNG"])
+    """_run_binary returns raw bytes from stdout.
+
+    Uses /usr/bin/env python3 with -c rather than printf because BSD
+    printf (macOS, BSDs) does not expand \\xNN escape sequences -- it
+    emits the literal characters -- whereas GNU printf (Linux) does.
+    Python's sys.stdout.buffer.write is portable across all platforms.
+    Skipped on Windows where /usr/bin/env is not present.
+    """
+    import sys as _sys
+
+    if _sys.platform == "win32":
+        import pytest as _pytest
+
+        _pytest.skip("python -c stdout-bytes test does not need a Windows variant")
+    result = await _run_binary(
+        ["python3", "-c", "import sys; sys.stdout.buffer.write(b'\\x89PNG')"]
+    )
     assert result == b"\x89PNG"
 
 
@@ -2767,39 +2815,40 @@ async def test_macos_write_typed_command_line_bounded_for_large_payloads():
 
 @pytest.mark.asyncio
 async def test_windows_write_typed_plain():
-    """_windows_write_typed uses Set-Clipboard for text/plain."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
+    """_windows_write_typed forwards text/plain to clipboard_win32.write_text
+    unchanged (CF_UNICODETEXT under the hood)."""
+    with patch("mcp_clipboard.clipboard_win32.write_text") as mock_write:
         await _windows_write_typed("hello", "text/plain")
 
-    cmd = mock.call_args[0][0]
-    assert "powershell" in cmd[0].lower()
-    assert mock.call_args[0][1] == b"hello"
+    mock_write.assert_called_once_with("hello", "text/plain")
 
 
 @pytest.mark.asyncio
 async def test_windows_write_typed_html():
-    """_windows_write_typed wraps HTML in CF_HTML format for text/html."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
+    """_windows_write_typed wraps text/html in CF_HTML before forwarding to
+    clipboard_win32.write_text. The wrapper carries Version + StartHTML/
+    EndHTML/StartFragment/EndFragment offsets so paste targets can find
+    the body fragment in the surrounding boilerplate."""
+    with patch("mcp_clipboard.clipboard_win32.write_text") as mock_write:
         await _windows_write_typed("<b>hello</b>", "text/html")
 
-    data = mock.call_args[0][1]
-    text = data.decode("utf-8")
-    # CF_HTML header must be present
-    assert "Version:0.9" in text
-    assert "StartHTML:" in text
-    assert "StartFragment:" in text
-    assert "<!--StartFragment-->" in text
-    assert "<b>hello</b>" in text
+    payload, mime = mock_write.call_args[0]
+    assert mime == "text/html"
+    assert "Version:0.9" in payload
+    assert "StartHTML:" in payload
+    assert "StartFragment:" in payload
+    assert "<!--StartFragment-->" in payload
+    assert "<b>hello</b>" in payload
 
 
 @pytest.mark.asyncio
 async def test_windows_write_typed_rtf():
-    """_windows_write_typed passes RTF content for text/rtf."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
+    """_windows_write_typed forwards text/rtf to clipboard_win32.write_text
+    unchanged (the RTF source is the wire format)."""
+    with patch("mcp_clipboard.clipboard_win32.write_text") as mock_write:
         await _windows_write_typed(r"{\rtf1 hi}", "text/rtf")
 
-    cmd = mock.call_args[0][0]
-    assert "Rtf" in " ".join(cmd)
+    mock_write.assert_called_once_with(r"{\rtf1 hi}", "text/rtf")
 
 
 @pytest.mark.asyncio
@@ -2885,17 +2934,13 @@ async def test_macos_write_typed_unsupported_lists_svg():
 
 @pytest.mark.asyncio
 async def test_windows_write_typed_svg():
-    """_windows_write_typed sets a DataObject custom format 'image/svg+xml'."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
+    """_windows_write_typed forwards image/svg+xml to clipboard_win32.write_text
+    unchanged. The Win32 backend registers 'image/svg+xml' as a custom
+    clipboard format ID and stores the markup as UTF-8 bytes."""
+    with patch("mcp_clipboard.clipboard_win32.write_text") as mock_write:
         await _windows_write_typed(_SAMPLE_SVG, "image/svg+xml")
 
-    cmd = mock.call_args[0][0]
-    script = " ".join(cmd)
-    assert "DataObject" in script
-    assert "'image/svg+xml'" in script
-    assert "SetDataObject" in script
-    # Content flows over stdin, not in the script body.
-    assert mock.call_args[0][1] == _SAMPLE_SVG.encode("utf-8")
+    mock_write.assert_called_once_with(_SAMPLE_SVG, "image/svg+xml")
 
 
 @pytest.mark.asyncio
@@ -2917,21 +2962,19 @@ async def test_windows_write_typed_unsupported_lists_svg():
 
 
 @pytest.mark.asyncio
-async def test_windows_read_svg_uses_data_object_get_data():
-    """_windows_read for image/svg+xml calls Clipboard::GetData('image/svg+xml')
-    via PowerShell, mirroring the custom-format string used on the write side."""
+async def test_windows_read_svg_dispatches_to_win32_wrapper():
+    """_windows_read for image/svg+xml forwards to clipboard_win32.read_text,
+    which registers the 'image/svg+xml' custom format ID and reads the
+    UTF-8-encoded markup. (Old test asserted PowerShell-script details that
+    no longer exist; the underlying Win32 GetClipboardData call is exercised
+    by integration tests against a real Windows clipboard.)"""
     from mcp_clipboard.clipboard import _windows_read
 
-    with patch("mcp_clipboard.clipboard._run", new=AsyncMock(return_value=_SAMPLE_SVG)) as mock:
+    with patch("mcp_clipboard.clipboard_win32.read_text", return_value=_SAMPLE_SVG) as mock_read:
         result = await _windows_read("image/svg+xml")
 
     assert result == _SAMPLE_SVG
-    cmd = mock.call_args[0][0]
-    script = " ".join(cmd)
-    assert "GetData('image/svg+xml')" in script
-    # OutputEncoding directive prevents OEM mojibake on the way back.
-    assert "[Console]::OutputEncoding" in script
-    assert "UTF8" in script
+    mock_read.assert_called_once_with("image/svg+xml")
 
 
 @pytest.mark.asyncio
@@ -3095,91 +3138,59 @@ async def test_clipboard_paste_does_not_route_svg_through_image_read_path():
 # ---------------------------------------------------------------------------
 
 
-def _windows_powershell_script(call_args: tuple) -> str:
-    """Extract the PowerShell -Command script from a _run_with_stdin call."""
-    cmd = call_args[0]
-    # cmd is ["powershell", "-NoProfile", "-Command", "<script>"]
-    return cmd[3]
-
-
-def _assert_utf8_input_encoding(script: str) -> None:
-    """Assert the PowerShell script sets InputEncoding to UTF-8 before reading stdin."""
-    assert "[Console]::InputEncoding" in script, (
-        "PowerShell script must set [Console]::InputEncoding before reading stdin "
-        "(otherwise non-ASCII chars are corrupted on Windows). Script: " + script
-    )
-    assert "UTF8" in script, "InputEncoding must be set to UTF-8. Script: " + script
-    # Encoding setup must precede the stdin read it governs.
-    encoding_idx = script.index("[Console]::InputEncoding")
-    read_idx = script.index("[Console]::In.ReadToEnd()")
-    assert encoding_idx < read_idx, (
-        "InputEncoding must be set BEFORE [Console]::In.ReadToEnd(); "
-        f"found InputEncoding at {encoding_idx}, ReadToEnd at {read_idx}"
-    )
+# --- UTF-8 round-trip via the win32 wrapper --------------------------------
+#
+# The Windows backend no longer pipes content through PowerShell stdin, so
+# the codepage-transcoding bug class that #131 closed (and #142 / #132
+# closed on the read leg) cannot reoccur structurally. The
+# clipboard_win32.write_text path takes a Python str and hands it to either
+# CF_UNICODETEXT (UTF-16 native) or a custom-format-id slot encoded UTF-8;
+# no console code page sits in the path. The tests below exercise the
+# Python-side dispatch for non-ASCII content and confirm the bytes that
+# would be handed to the Win32 layer are the correct UTF-8 sequences.
 
 
 @pytest.mark.asyncio
-async def test_windows_write_sets_utf8_input_encoding():
-    """_windows_write must set UTF-8 InputEncoding before reading stdin (#129)."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
-        await _windows_write("hello")
-
-    _assert_utf8_input_encoding(_windows_powershell_script(mock.call_args[0]))
-
-
-@pytest.mark.asyncio
-async def test_windows_write_passes_utf8_bytes_for_non_ascii():
-    """_windows_write encodes content as UTF-8 (em dash round-trips correctly)."""
+async def test_windows_write_passes_str_for_non_ascii():
+    """_windows_write hands the original Python str to the win32 wrapper.
+    The wrapper internally writes CF_UNICODETEXT for text/plain so non-ASCII
+    codepoints (em dash U+2014, curly quotes, ellipsis, CJK, Arabic, emoji)
+    survive without codepage transliteration."""
     em_dash_text = "before — after"
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
+    with patch("mcp_clipboard.clipboard_win32.write_text") as mock_write:
         await _windows_write(em_dash_text)
 
-    # Stdin payload must be UTF-8 bytes -- the 3-byte sequence 0xE2 0x80 0x94
-    # for U+2014, NOT a CP1252 single byte 0x97.
-    stdin_bytes = mock.call_args[0][1]
-    assert stdin_bytes == em_dash_text.encode("utf-8")
-    assert b"\xe2\x80\x94" in stdin_bytes
+    mock_write.assert_called_once_with(em_dash_text, "text/plain")
+
+
+@pytest.mark.parametrize(
+    "mime_type,sample",
+    [
+        ("text/plain", "hello"),
+        ("text/rtf", r"{\rtf1 hi}"),
+        ("image/svg+xml", "<svg/>"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_windows_write_typed_dispatch_passes_str_unchanged(mime_type, sample):
+    """_windows_write_typed forwards the Python str to clipboard_win32.write_text
+    unchanged for every supported MIME except text/html, which is wrapped
+    in CF_HTML first (covered in test_windows_write_typed_html above)."""
+    with patch("mcp_clipboard.clipboard_win32.write_text") as mock_write:
+        await _windows_write_typed(sample, mime_type)
+
+    mock_write.assert_called_once_with(sample, mime_type)
 
 
 @pytest.mark.asyncio
-async def test_windows_write_typed_plain_sets_utf8_input_encoding():
-    """_windows_write_typed text/plain must set UTF-8 InputEncoding (#129)."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
-        await _windows_write_typed("hello", "text/plain")
-
-    _assert_utf8_input_encoding(_windows_powershell_script(mock.call_args[0]))
-
-
-@pytest.mark.asyncio
-async def test_windows_write_typed_html_sets_utf8_input_encoding():
-    """_windows_write_typed text/html must set UTF-8 InputEncoding (#129).
-
-    The CF_HTML byte offsets in the header are computed against UTF-8 bytes
-    in Python; if PowerShell reads stdin as CP1252 the offsets are off and
-    the fragment markers point into garbage.
-    """
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
-        await _windows_write_typed("<b>hi</b>", "text/html")
-
-    _assert_utf8_input_encoding(_windows_powershell_script(mock.call_args[0]))
-
-
-@pytest.mark.asyncio
-async def test_windows_write_typed_rtf_sets_utf8_input_encoding():
-    """_windows_write_typed text/rtf must set UTF-8 InputEncoding (#129)."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
-        await _windows_write_typed(r"{\rtf1 hi}", "text/rtf")
-
-    _assert_utf8_input_encoding(_windows_powershell_script(mock.call_args[0]))
-
-
-@pytest.mark.asyncio
-async def test_windows_write_typed_svg_sets_utf8_input_encoding():
-    """_windows_write_typed image/svg+xml must set UTF-8 InputEncoding (#129)."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
-        await _windows_write_typed(_SAMPLE_SVG, "image/svg+xml")
-
-    _assert_utf8_input_encoding(_windows_powershell_script(mock.call_args[0]))
+async def test_windows_write_typed_wraps_win32_errors_as_clipboard_error():
+    """Errors from the win32 wrapper surface as ClipboardError uniformly."""
+    with patch(
+        "mcp_clipboard.clipboard_win32.write_text",
+        side_effect=RuntimeError("OpenClipboard failed"),
+    ):
+        with pytest.raises(ClipboardError, match="Windows clipboard write failed"):
+            await _windows_write_typed("hi", "text/plain")
 
 
 # ---------------------------------------------------------------------------
@@ -3773,68 +3784,53 @@ async def test_macos_write_multi_chunks_large_content_per_format():
 
 
 @pytest.mark.asyncio
-async def test_windows_write_multi_emits_setdata_per_format():
-    """Windows multi-format script must invoke SetData once per recognized MIME."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
-        await _windows_write_multi({"text/html": "<p>hi</p>", "text/plain": "hi"})
+async def test_windows_write_multi_filters_and_forwards_to_win32_wrapper():
+    """_windows_write_multi forwards recognized MIMEs to clipboard_win32.write_multi,
+    wrapping text/html in CF_HTML before handoff and dropping unsupported
+    MIMEs silently. The Win32 wrapper performs the OpenClipboard ->
+    EmptyClipboard -> SetClipboardData per format -> CloseClipboard
+    transaction atomically."""
+    with patch("mcp_clipboard.clipboard_win32.write_multi") as mock_multi:
+        await _windows_write_multi(
+            {
+                "text/html": "<p>hi</p>",
+                "text/plain": "hi",
+                "text/rtf": r"{\rtf1 hi}",
+                "application/foo": "dropped",
+            }
+        )
 
-    cmd = mock.call_args[0][0]
-    script = " ".join(cmd)
-    assert "DataObject" in script
-    assert "DataFormats]::Html" in script
-    assert "DataFormats]::Text" in script
-    assert "SetDataObject" in script
-
-    # Stdin is JSON with both encoded entries.
-    import json as _json
-
-    payload = _json.loads(mock.call_args[0][1].decode("utf-8"))
-    assert "html" in payload
-    assert "text" in payload
-
-
-@pytest.mark.asyncio
-async def test_windows_write_multi_html_is_cf_html_wrapped():
-    """text/html on Windows must be CF_HTML-wrapped (Version:0.9 header etc)
-    matching the existing _windows_write_typed convention."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
-        await _windows_write_multi({"text/html": "<p>hi</p>"})
-
-    import base64 as _b64
-    import json as _json
-
-    payload = _json.loads(mock.call_args[0][1].decode("utf-8"))
-    decoded = _b64.b64decode(payload["html"]).decode("utf-8")
-    assert decoded.startswith("Version:0.9")
-    assert "StartHTML:" in decoded
-    assert "<!--StartFragment-->" in decoded
-    assert "<p>hi</p>" in decoded
+    mock_multi.assert_called_once()
+    payloads = mock_multi.call_args[0][0]
+    # Recognized MIMEs preserved; unsupported dropped.
+    assert set(payloads.keys()) == {"text/html", "text/plain", "text/rtf"}
+    # text/html wrapped in CF_HTML; other MIMEs unchanged.
+    assert payloads["text/plain"] == "hi"
+    assert payloads["text/rtf"] == r"{\rtf1 hi}"
+    html = payloads["text/html"]
+    assert html.startswith("Version:0.9")
+    assert "StartHTML:" in html
+    assert "<!--StartFragment-->" in html
+    assert "<p>hi</p>" in html
 
 
 @pytest.mark.asyncio
 async def test_windows_write_multi_empty_after_filter_is_noop():
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
+    """If every input MIME is unsupported, the wrapper is never called."""
+    with patch("mcp_clipboard.clipboard_win32.write_multi") as mock_multi:
         await _windows_write_multi({"application/foo": "x"})
-    mock.assert_not_called()
+    mock_multi.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_windows_write_multi_supports_rtf():
-    """text/rtf is one of the three formats Windows multi-format encodes —
-    covers the rtf branch in both the encode loop and the script-builder."""
-    with patch("mcp_clipboard.clipboard._run_with_stdin", new_callable=AsyncMock) as mock:
-        await _windows_write_multi({"text/rtf": r"{\rtf1 hi}"})
-
-    cmd = mock.call_args[0][0]
-    script = " ".join(cmd)
-    assert "DataFormats]::Rtf" in script
-
-    import base64 as _b64
-    import json as _json
-
-    payload = _json.loads(mock.call_args[0][1].decode("utf-8"))
-    assert "rtf" in payload
-    assert _b64.b64decode(payload["rtf"]).decode("utf-8") == r"{\rtf1 hi}"
+async def test_windows_write_multi_wraps_win32_errors_as_clipboard_error():
+    """Errors from the win32 wrapper surface as ClipboardError uniformly."""
+    with patch(
+        "mcp_clipboard.clipboard_win32.write_multi",
+        side_effect=RuntimeError("OpenClipboard failed"),
+    ):
+        with pytest.raises(ClipboardError, match="Windows clipboard multi-format write failed"):
+            await _windows_write_multi({"text/plain": "hi"})
 
 
 @pytest.mark.asyncio

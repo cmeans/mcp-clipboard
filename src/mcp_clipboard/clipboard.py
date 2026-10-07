@@ -12,13 +12,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import json
 import logging
 import os
 import platform
 import shutil
 import stat
 from pathlib import Path
+
+from . import clipboard_win32 as _w32
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,12 @@ def _find_wayland_display() -> str | None:
     Scans $XDG_RUNTIME_DIR (falling back to /run/user/<uid>) for wayland-*
     Unix domain sockets.  Returns the socket name (e.g. "wayland-0") or None.
     """
-    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    # os.getuid is POSIX-only (KeyError-free on Linux/macOS, AttributeError on
+    # Windows). The Wayland path is never the active backend on Windows so
+    # the fallback construction is dead anyway, but the test suite mocks
+    # _get_backend to "wayland" on every platform; keep this Windows-safe.
+    getuid = getattr(os, "getuid", lambda: 0)
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{getuid()}")
     runtime_dir = Path(xdg_runtime)
     if not runtime_dir.is_dir():
         return None
@@ -223,7 +229,10 @@ def _wayland_env() -> dict[str, str] | None:
         return None  # both set — let subprocess inherit normally
 
     # Determine the runtime dir (needed by wl-paste even if WAYLAND_DISPLAY is set)
-    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    # os.getuid is POSIX-only -- fall back to 0 on Windows so the path simply
+    # fails the is_dir() check below and we return None.
+    getuid = getattr(os, "getuid", lambda: 0)
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{getuid()}"
     if not Path(xdg_runtime).is_dir():
         return None
 
@@ -417,88 +426,41 @@ async def _macos_list_formats(selection: str = "clipboard") -> list[str]:
     return result
 
 
-# PowerShell's default [Console]::OutputEncoding is the active console code
-# page (typically CP1252 / OEM ANSI on US-English Windows). When Get-Clipboard
-# returns a UTF-16 string and PowerShell pipes it to stdout for our subprocess
-# capture, that encoder best-fit-transliterates non-ASCII codepoints (em dash
-# -> hyphen, curly quote -> straight, ellipsis -> period) and substitutes
-# unmappable ones (CJK, Arabic, emoji) with U+003F. The bytes on the clipboard
-# are correct; only the way back to Python is lossy. Forcing UTF-8 stdout in
-# every read branch eliminates the dependence on the parent's console codepage.
-# See #142 for the diagnostic chain (mc-026/027/028/102 confirmed the clipboard
-# bytes intact while mc-002/003 saw the corruption from the same code path
-# under a different parent codepage). Sibling fix to #131's input-side preamble
-# (which closed #129) in _windows_write* (see _WINDOWS_UTF8_PREAMBLE). Also
-# closes #132, the read-direction tracker filed during #131's QA review.
-_WINDOWS_UTF8_OUTPUT_PREAMBLE = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+# Windows backend: direct Win32 clipboard API via pywin32.
+#
+# Earlier versions of this server shelled out to `powershell -NoProfile
+# -Command "..."` per MCP tool call. That had two structural problems:
+#   1. Cross-process read-after-write race -- after a SetDataObject(.., copy=true)
+#      the OLE clipboard chain needs to fully propagate the snapshot from the
+#      exiting writer before a fresh reader process sees it. The resulting
+#      staleness window made `clipboard_copy(mime_type=image/svg+xml)` appear
+#      to silently no-op when followed by an immediate `paste`/`list_formats`/
+#      `read_raw` -- the bytes were on the clipboard, but the next reader saw
+#      the previous state. (cmeans/mcp-clipboard#143)
+#   2. PowerShell stdin/stdout codepage transcoding -- non-ASCII codepoints
+#      lossy because [Console]::InputEncoding / OutputEncoding default to the
+#      parent's active console code page. Closed by #131 (input) and #142 /
+#      #132 (output) but kept fragile.
+#
+# The new backend keeps clipboard ownership inside the long-lived MCP-server
+# Python process. Each clipboard op is a synchronous Win32 OpenClipboard ->
+# Empty/Set/Get -> CloseClipboard transaction in our address space, dispatched
+# off the asyncio loop via asyncio.to_thread. No subprocess spawn, no codepage
+# transcoding, no cross-process race.
+#
+# See clipboard_win32.py for the wrapper module (imported at the top of the
+# file as `_w32`).
 
 
 async def _windows_read(mime_type: str, selection: str = "clipboard") -> str:
     _reject_non_clipboard_selection(selection, "Windows")
-    if mime_type == "text/html":
-        script = (
-            _WINDOWS_UTF8_OUTPUT_PREAMBLE + "Add-Type -AssemblyName System.Windows.Forms; "
-            "[System.Windows.Forms.Clipboard]::GetData([System.Windows.Forms.DataFormats]::Html)"
-        )
-        return await _run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                script,
-            ],
-            allow_empty_exit=False,
-        )
-
-    if mime_type == "text/plain":
-        return await _run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                _WINDOWS_UTF8_OUTPUT_PREAMBLE + "Get-Clipboard",
-            ],
-            allow_empty_exit=False,
-        )
-
-    if mime_type == "text/rtf":
-        script = (
-            _WINDOWS_UTF8_OUTPUT_PREAMBLE + "Add-Type -AssemblyName System.Windows.Forms; "
-            "$data = [System.Windows.Forms.Clipboard]::GetData("
-            "[System.Windows.Forms.DataFormats]::Rtf); "
-            "if ($data -eq $null) { return }; $data"
-        )
-        return await _run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                script,
-            ],
-            allow_empty_exit=False,
-        )
-
-    if mime_type == "image/svg+xml":
-        # SVG is written via _windows_write_typed as a custom format string
-        # 'image/svg+xml' on the DataObject. Reading it back uses the same
-        # format string. Same UTF-8 stdout preamble as the text branches.
-        script = (
-            _WINDOWS_UTF8_OUTPUT_PREAMBLE + "Add-Type -AssemblyName System.Windows.Forms; "
-            "$data = [System.Windows.Forms.Clipboard]::GetData('image/svg+xml'); "
-            "if ($data -eq $null) { return }; $data"
-        )
-        return await _run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                script,
-            ],
-            allow_empty_exit=False,
-        )
-
-    # Unsupported MIME type — signal "not available" rather than returning wrong content
-    return ""
+    if mime_type not in ("text/html", "text/plain", "text/rtf", "image/svg+xml"):
+        # Unsupported MIME type — signal "not available" rather than returning wrong content
+        return ""
+    try:
+        return await asyncio.to_thread(_w32.read_text, mime_type)
+    except Exception as exc:
+        raise ClipboardError(f"Windows clipboard read failed: {exc}") from exc
 
 
 _WIN_TO_MIME: dict[str, str] = {
@@ -513,12 +475,10 @@ _WIN_TO_MIME: dict[str, str] = {
 
 async def _windows_list_formats(selection: str = "clipboard") -> list[str]:
     _reject_non_clipboard_selection(selection, "Windows")
-    script = (
-        "Add-Type -AssemblyName System.Windows.Forms; "
-        "[System.Windows.Forms.Clipboard]::GetDataObject().GetFormats()"
-    )
-    raw = await _run(["powershell", "-NoProfile", "-Command", script], allow_empty_exit=False)
-    native = [line.strip() for line in raw.splitlines() if line.strip()]
+    try:
+        native = await asyncio.to_thread(_w32.list_formats)
+    except Exception as exc:
+        raise ClipboardError(f"Windows clipboard list failed: {exc}") from exc
     # Deduplicate: Windows clipboards routinely expose both "Text" and
     # "UnicodeText" which both map to text/plain. Mirror _macos_list_formats.
     seen: set[str] = set()
@@ -620,25 +580,19 @@ async def _macos_write(content: str) -> None:
     await _run_with_stdin(["pbcopy"], content.encode())
 
 
-# PowerShell preamble that forces stdin reads to use UTF-8. Without this,
-# [Console]::In.ReadToEnd() decodes via [Console]::InputEncoding which
-# defaults to the OEM/ANSI code page on Windows (commonly CP1252). UTF-8
-# multi-byte sequences from Python's content.encode() get misread as
-# separate CP1252 characters before Set-Clipboard ever runs, corrupting
-# em dashes, curly quotes, non-Latin scripts, etc. (#129)
-_WINDOWS_UTF8_PREAMBLE = "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
+# NOTE: _WINDOWS_UTF8_PREAMBLE -- the PowerShell stdin-encoding preamble
+# from #131 that closed #129 -- is no longer needed: text/plain writes go
+# through clipboard_win32.write_text which sets CF_UNICODETEXT directly
+# from a Python str, with no PowerShell process and no codepage transcoding
+# in the path. Removed alongside the rest of the PowerShell-subprocess Windows
+# write backend.
 
 
 async def _windows_write(content: str) -> None:
-    await _run_with_stdin(
-        [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            _WINDOWS_UTF8_PREAMBLE + "Set-Clipboard -Value ([Console]::In.ReadToEnd())",
-        ],
-        content.encode(),
-    )
+    try:
+        await asyncio.to_thread(_w32.write_text, content, "text/plain")
+    except Exception as exc:
+        raise ClipboardError(f"Windows clipboard write failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -805,73 +759,23 @@ def _windows_html_clipboard_wrap(html: str) -> str:
 
 
 async def _windows_write_typed(content: str, mime_type: str) -> None:
-    # Every branch below pipes UTF-8 bytes over stdin and reads them with
-    # [Console]::In.ReadToEnd(). The _WINDOWS_UTF8_PREAMBLE on each script
-    # is what makes that read interpret the bytes as UTF-8 rather than the
-    # default OEM/ANSI code page. See #129.
-    if mime_type == "text/plain":
-        await _run_with_stdin(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                _WINDOWS_UTF8_PREAMBLE + "Set-Clipboard -Value ([Console]::In.ReadToEnd())",
-            ],
-            content.encode(),
+    if mime_type not in ("text/plain", "text/html", "text/rtf", "image/svg+xml"):
+        raise ClipboardError(
+            f"Windows clipboard write does not support MIME type {mime_type!r}. "
+            "Supported: text/plain, text/html, text/rtf, image/svg+xml"
         )
-        return
 
-    if mime_type == "text/html":
-        cf_html = _windows_html_clipboard_wrap(content)
-        script = (
-            _WINDOWS_UTF8_PREAMBLE + "Add-Type -AssemblyName System.Windows.Forms; "
-            "$content = [Console]::In.ReadToEnd(); "
-            "$data = New-Object System.Windows.Forms.DataObject; "
-            "$data.SetData([System.Windows.Forms.DataFormats]::Html, $content); "
-            "[System.Windows.Forms.Clipboard]::SetDataObject($data, $true)"
-        )
-        await _run_with_stdin(
-            ["powershell", "-NoProfile", "-Command", script],
-            cf_html.encode("utf-8"),
-        )
-        return
+    # text/html: wrap as CF_HTML before handing to the Win32 writer, mirroring
+    # what apps like Word, Outlook, and Chrome put on the clipboard. The
+    # wrapper carries Version + StartHTML/EndHTML/StartFragment/EndFragment
+    # offsets so paste targets can extract the body fragment from the
+    # surrounding boilerplate.
+    payload = _windows_html_clipboard_wrap(content) if mime_type == "text/html" else content
 
-    if mime_type == "text/rtf":
-        script = (
-            _WINDOWS_UTF8_PREAMBLE + "Add-Type -AssemblyName System.Windows.Forms; "
-            "$content = [Console]::In.ReadToEnd(); "
-            "$data = New-Object System.Windows.Forms.DataObject; "
-            "$data.SetData([System.Windows.Forms.DataFormats]::Rtf, $content); "
-            "[System.Windows.Forms.Clipboard]::SetDataObject($data, $true)"
-        )
-        await _run_with_stdin(
-            ["powershell", "-NoProfile", "-Command", script],
-            content.encode("utf-8"),
-        )
-        return
-
-    if mime_type == "image/svg+xml":
-        # Modern apps that consume SVG from the clipboard (Edge, Chrome,
-        # Figma desktop, Inkscape) look for the "image/svg+xml" custom
-        # format on the DataObject. Older apps fall through to text paste,
-        # which is acceptable since SVG IS text.
-        script = (
-            _WINDOWS_UTF8_PREAMBLE + "Add-Type -AssemblyName System.Windows.Forms; "
-            "$content = [Console]::In.ReadToEnd(); "
-            "$data = New-Object System.Windows.Forms.DataObject; "
-            "$data.SetData('image/svg+xml', $content); "
-            "[System.Windows.Forms.Clipboard]::SetDataObject($data, $true)"
-        )
-        await _run_with_stdin(
-            ["powershell", "-NoProfile", "-Command", script],
-            content.encode("utf-8"),
-        )
-        return
-
-    raise ClipboardError(
-        f"Windows clipboard write does not support MIME type {mime_type!r}. "
-        "Supported: text/plain, text/html, text/rtf, image/svg+xml"
-    )
+    try:
+        await asyncio.to_thread(_w32.write_text, payload, mime_type)
+    except Exception as exc:
+        raise ClipboardError(f"Windows clipboard write failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -935,59 +839,25 @@ async def _macos_write_multi(formats: dict[str, str]) -> None:
 
 
 async def _windows_write_multi(formats: dict[str, str]) -> None:
-    # Pre-encode each format on the Python side. text/html is wrapped in
-    # Windows CF_HTML format with byte offsets per the existing convention
-    # (see _windows_html_clipboard_wrap). Payloads flow over stdin as a
-    # JSON document so the constructed argv stays bounded regardless of
-    # content size (mirrors the post-#117 Windows-write stdin pattern).
-    encoded: dict[str, str] = {}
+    # Filter to the MIME types the Win32 backend can carry, wrapping
+    # text/html in CF_HTML (Version + StartHTML/EndHTML/StartFragment/
+    # EndFragment offsets) before handing off. Other MIMEs drop silently --
+    # multi-format is best-effort by design (the caller may pass formats
+    # not all backends know).
+    payloads: dict[str, str] = {}
     for mime, content in formats.items():
         if mime == "text/html":
-            wrapped = _windows_html_clipboard_wrap(content)
-            encoded["html"] = base64.b64encode(wrapped.encode("utf-8")).decode("ascii")
-        elif mime == "text/plain":
-            encoded["text"] = base64.b64encode(content.encode("utf-8")).decode("ascii")
-        elif mime == "text/rtf":
-            encoded["rtf"] = base64.b64encode(content.encode("utf-8")).decode("ascii")
-        # Other MIMEs are dropped silently — multi-format is best-effort.
+            payloads[mime] = _windows_html_clipboard_wrap(content)
+        elif mime in ("text/plain", "text/rtf"):
+            payloads[mime] = content
+        # Anything else: skip.
 
-    if not encoded:
+    if not payloads:
         return
-
-    parts: list[str] = [
-        "Add-Type -AssemblyName System.Windows.Forms",
-        "$json = [Console]::In.ReadToEnd()",
-        "$payloads = ConvertFrom-Json $json",
-        "$data = New-Object System.Windows.Forms.DataObject",
-    ]
-    if "html" in encoded:
-        parts.append(
-            "if ($payloads.html) { "
-            "$b = [Convert]::FromBase64String($payloads.html); "
-            "$s = [System.Text.Encoding]::UTF8.GetString($b); "
-            "$data.SetData([System.Windows.Forms.DataFormats]::Html, $s) }"
-        )
-    if "text" in encoded:
-        parts.append(
-            "if ($payloads.text) { "
-            "$b = [Convert]::FromBase64String($payloads.text); "
-            "$s = [System.Text.Encoding]::UTF8.GetString($b); "
-            "$data.SetData([System.Windows.Forms.DataFormats]::Text, $s) }"
-        )
-    if "rtf" in encoded:
-        parts.append(
-            "if ($payloads.rtf) { "
-            "$b = [Convert]::FromBase64String($payloads.rtf); "
-            "$s = [System.Text.Encoding]::UTF8.GetString($b); "
-            "$data.SetData([System.Windows.Forms.DataFormats]::Rtf, $s) }"
-        )
-    parts.append("[System.Windows.Forms.Clipboard]::SetDataObject($data, $true)")
-    script = "; ".join(parts)
-
-    await _run_with_stdin(
-        ["powershell", "-NoProfile", "-Command", script],
-        json.dumps(encoded).encode("utf-8"),
-    )
+    try:
+        await asyncio.to_thread(_w32.write_multi, payloads)
+    except Exception as exc:
+        raise ClipboardError(f"Windows clipboard multi-format write failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

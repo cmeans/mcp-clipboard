@@ -4,9 +4,67 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
-### Changed
+### Added
+- **Cross-platform CI matrix.** `.github/workflows/ci.yml` now runs the
+  unit-test suite on `ubuntu-latest`, `windows-latest`, and `macos-latest`
+  across Python 3.11 / 3.12 / 3.13 with `fail-fast: false`. The Linux
+  cell preserves coverage upload to Codecov; the other cells just run
+  the tests. Per-push verification of the platform-specific code paths
+  replaces what previously required a manual QEMU round-trip.
+- **`integration-windows` CI job.** Exercises the new pywin32-backed
+  Windows clipboard against a real Windows Server 2025 session via the
+  new `tests/test_clipboard_win32_integration.py` suite (round-trips
+  text/plain with non-ASCII, text/html, text/rtf, image/svg+xml,
+  multi-format atomic writes, list_formats; the tests self-skip on
+  non-Windows so they are harmless on local Linux pytest runs).
 
+### Changed
+- **Windows backend rewritten on top of `pywin32`.** Earlier versions
+  shelled out to `powershell -NoProfile -Command "..."` once per MCP
+  tool call. That architecture had two structural defects: (1) a
+  cross-process read-after-write race where a fresh reader subprocess
+  could miss a snapshot the exiting writer subprocess had just placed
+  on the clipboard (the silent-no-op symptom captured by mc-005,
+  mc-009, and mc-020 in the Windows e2e suite), and (2) PowerShell
+  stdin / stdout codepage transcoding that lossy-ified non-ASCII
+  codepoints. The new backend in `mcp_clipboard/clipboard_win32.py`
+  keeps clipboard access inside the long-lived MCP-server Python
+  process and calls the standard Win32 clipboard API directly via
+  `pywin32`, the same pattern Chromium, Qt, clipboard-win, and
+  pyperclip use. Writes are `OpenClipboard` -> `EmptyClipboard` -> per
+  format `GlobalAlloc(GMEM_MOVEABLE)` + `GlobalLock` / copy /
+  `GlobalUnlock` + `SetClipboardData` -> `CloseClipboard`, so
+  multi-format writes (`clipboard_copy_markdown`) land in one
+  transaction. Reads use `GetClipboardData` / `EnumClipboardFormats`.
+  No subprocess spawn, no codepage transcoding, no per-op PowerShell
+  cold start. text/plain uses `CF_UNICODETEXT` (UTF-16 native);
+  text/html / text/rtf / image/svg+xml use registered custom formats
+  with UTF-8 byte payloads. The encoding fixes from #131 (input) and
+  #142 / #132 (output) become structurally unnecessary, since there is
+  no console code page in the read or write path. `pywin32` is added
+  as a Windows-only dependency (`sys_platform == 'win32'` marker).
+  Phase 1 covers text formats (text/plain, text/html, text/rtf,
+  image/svg+xml); image read/write stays on PowerShell until Phase 2
+  (#147) ports it with DIB <-> PNG conversion. Closes #143.
 - **Bump github-actions group: actions/checkout 6→7, actions/create-github-app-token 3.1.1→3.2.0, actions/setup-python 6→7, codecov/codecov-action 6→7** (#152)
+
+### Fixed
+- Windows: added a control script (`dev/windows-clipboard-observers.ps1`)
+  to disable the documented Windows clipboard chain observers
+  (`cbdhsvc` Clipboard History service, Cloud Clipboard sync, Suggested
+  Actions text extractor) for users who need zero-flake clipboard
+  behavior. The script captures current state, applies test values,
+  and restores cleanly on `-Mode Restore`. The race the script
+  works around is the asynchronously-posted `WM_CLIPBOARDUPDATE`
+  notification on Windows 11 (per [Microsoft Q&A 1327362](https://learn.microsoft.com/en-us/answers/questions/1327362/wm-clipboardupdate-issue)),
+  which lets observers re-open the clipboard immediately after our
+  `CloseClipboard` and overwrite our content. This is the same race
+  every mature Windows clipboard library lives with (Chromium, Qt,
+  clipboard-win, pyperclip, .NET WinForms) and has no published fix.
+  We empirically confirmed the script eliminates the symptom: with
+  observers off the QEMU e2e suite goes from 24/28 PASS to 27/28
+  PASS with zero first-attempt race recoveries.
+
 
 ## [2.6.2] - 2026-10-07
 

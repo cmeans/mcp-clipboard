@@ -45,9 +45,19 @@ jobs:
         run: uv run mypy src/mcp_clipboard/
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      # Run all matrix cells even when one fails so a single-platform issue
+      # does not mask the others. Per ci-clipboard-windows-strategy
+      # awareness note (2026-05-09): GH Actions matrix is the recommended
+      # path because windows-latest and macos-latest are free for public
+      # repos and have real session/window servers. Linux runners are
+      # headless; integration-x11 below uses xvfb-run for the Linux
+      # clipboard path while the unit tests here stay platform-agnostic
+      # by mocking the backend.
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
@@ -65,12 +75,38 @@ jobs:
         run: uv run pytest --cov --cov-report=xml
 
       - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v7
         with:
           files: coverage.xml
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  integration-windows:
+    # Closes the QEMU manual-test loop. The pywin32 Win32 clipboard backend
+    # in clipboard_win32.py is exercisable directly on a windows-latest
+    # runner -- real Windows Server 2025 with a real session and a real
+    # clipboard, no virtualization indirection. Per-push integration coverage
+    # for text/plain (with non-ASCII), text/html, text/rtf, image/svg+xml,
+    # multi-format atomic writes, and list_formats. The tests in
+    # tests/test_clipboard_win32_integration.py self-skip on non-Windows so
+    # they're harmless on local Linux pytest runs; this job is the place
+    # they actually exercise a clipboard.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run Win32 clipboard integration tests
+        run: uv run pytest tests/test_clipboard_win32_integration.py -m integration -v
 
   integration-x11:
     runs-on: ubuntu-latest
