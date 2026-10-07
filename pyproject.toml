@@ -26,7 +26,7 @@ classifiers = [
 ]
 keywords = ["clipboard", "mcp", "claude", "paste", "spreadsheet", "table"]
 dependencies = [
-    "mcp[cli]>=1.2.0,<2",
+    "mcp[cli]>=1.15.0,<2",
     "markdown-it-py>=3.0",
 ]
 
