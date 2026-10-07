@@ -13,6 +13,12 @@ All notable changes to this project will be documented here.
   without depending on a shell or filesystem access.
 
 ### Fixed
+- Fresh installs crash on startup with `ModuleNotFoundError: No module
+  named 'mcp.server.fastmcp'`. The `mcp[cli]` dependency had no upper
+  bound, so new installs resolved mcp 2.x (released 2026-07-28), which
+  renamed `FastMCP` to `MCPServer`. The dependency is now capped at
+  `mcp[cli]>=1.2.0,<2`; migrating to the mcp 2.x API is tracked
+  separately. Closes #153
 - Windows: non-ASCII characters survive `clipboard_paste` and
   `clipboard_read_raw` round-trips. Em dash (U+2014), curly quotes
   (U+2018-U+201D), ellipsis (U+2026), and non-Latin scripts (CJK,
