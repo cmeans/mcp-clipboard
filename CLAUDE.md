@@ -72,7 +72,7 @@ Tests use `pytest` with `pytest-asyncio` (async mode: auto). All pytest config i
 ## Key Details
 
 - Python 3.11+ required
-- Runtime dependencies: `mcp[cli]>=1.2.0`, `markdown-it-py>=3.0` (for `clipboard_copy_markdown` rendering)
+- Runtime dependencies: `mcp[cli]>=1.15.0,<2` (floor: `mcp.types.Icon` first ships in 1.15.0; cap: mcp 2.x renamed `FastMCP`, migration tracked in #157), `markdown-it-py>=3.0` (for `clipboard_copy_markdown` rendering)
 - HTML parsing uses stdlib `html.parser` (no BeautifulSoup)
 - Pytest config is in `pyproject.toml` (no separate pytest.ini)
 - Entry point: `mcp_clipboard.server:main()`

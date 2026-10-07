@@ -5,12 +5,6 @@ All notable changes to this project will be documented here.
 ## [Unreleased]
 
 ### Added
-- New `clipboard_version` MCP tool that returns the running
-  mcp-clipboard package version. Diagnostic surface for hosts and
-  agents that don't otherwise expose `serverInfo` to the model
-  (notably Claude Desktop on Windows). Test harnesses can now
-  record `mcp_clipboard_version` from inside an MCP session
-  without depending on a shell or filesystem access.
 - **Cross-platform CI matrix.** `.github/workflows/ci.yml` now runs the
   unit-test suite on `ubuntu-latest`, `windows-latest`, and `macos-latest`
   across Python 3.11 / 3.12 / 3.13 with `fail-fast: false`. The Linux
@@ -122,6 +116,28 @@ All notable changes to this project will be documented here.
   worker thread, `_ole32_initialize`, `_ole_set_clipboard_with_retry`,
   `_ole_write_on_worker`, `_get_clipboard_sequence_number`,
   `_wait_for_clipboard_quiescent`, the 5-attempt verify-retry loop).
+
+## [2.6.2] - 2026-10-07
+
+### Added
+- New `clipboard_version` MCP tool that returns the running
+  mcp-clipboard package version. Diagnostic surface for hosts and
+  agents that don't otherwise expose `serverInfo` to the model
+  (notably Claude Desktop on Windows). Test harnesses can now
+  record `mcp_clipboard_version` from inside an MCP session
+  without depending on a shell or filesystem access.
+
+### Fixed
+- Fresh installs crash on startup with `ModuleNotFoundError: No module
+  named 'mcp.server.fastmcp'`. The `mcp[cli]` dependency had no upper
+  bound, so new installs resolved mcp 2.x (released 2026-07-28), which
+  renamed `FastMCP` to `MCPServer`. The dependency is now capped at
+  `<2`; migrating to the mcp 2.x API is tracked in #157. The floor is
+  also raised from `>=1.2.0` to `>=1.15.0`: the server has imported
+  `mcp.types.Icon` since v2.0.1, and that type first ships in mcp
+  1.15.0, so an environment that already had mcp 1.2 to 1.14 kept it
+  and crashed on startup with `ImportError: cannot import name 'Icon'`.
+  The specifier is now `mcp[cli]>=1.15.0,<2`. Closes #153.
 - Windows: non-ASCII characters survive `clipboard_paste` and
   `clipboard_read_raw` round-trips. Em dash (U+2014), curly quotes
   (U+2018-U+201D), ellipsis (U+2026), and non-Latin scripts (CJK,

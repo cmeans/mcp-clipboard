@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-clipboard"
-version = "2.6.1"
+version = "2.6.2"
 description = "MCP server that reads and writes the system clipboard — tables, text, code, JSON, URLs, images, and more."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -26,7 +26,7 @@ classifiers = [
 ]
 keywords = ["clipboard", "mcp", "claude", "paste", "spreadsheet", "table"]
 dependencies = [
-    "mcp[cli]>=1.2.0",
+    "mcp[cli]>=1.15.0,<2",
     "markdown-it-py>=3.0",
     # pywin32 backs the direct Win32 clipboard backend in clipboard_win32.py
     # on Windows hosts. Marker constrains the install to Windows so Linux /
