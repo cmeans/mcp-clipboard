@@ -11,6 +11,10 @@ All notable changes to this project will be documented here.
 ## [2.6.2] - 2026-10-07
 
 ### Added
+- Manual cross-platform MCP testing guide in `docs/testing.md`, with a compact
+  environment block, client-session checklist, platform-specific notes for
+  Wayland/X11/macOS/Windows, and a public repro report template.
+
 - New `clipboard_version` MCP tool that returns the running
   mcp-clipboard package version. Diagnostic surface for hosts and
   agents that don't otherwise expose `serverInfo` to the model
