@@ -6,6 +6,13 @@ All notable changes to this project will be documented here.
 
 ### Changed
 
+- Restore the Glama integration removed in #103: the README Glama score
+  badge (after the Downloads badge) and the `glama.json` maintainer
+  claim. Glama's Maintenance sub-score used to count planned roadmap
+  issues as unanswered support requests; Glama has since fixed that
+  metric, and the badge now reads "rated A" with maintenance rated A.
+  (#159)
+
 - **Bump github-actions group: actions/checkout 6→7, actions/create-github-app-token 3.1.1→3.2.0, actions/setup-python 6→7, codecov/codecov-action 6→7** (#152)
 
 ## [2.6.2] - 2026-10-07
