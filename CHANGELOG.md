@@ -6,6 +6,7 @@ All notable changes to this project will be documented here.
 
 ### Changed
 
+- **Bump python group: mcp 2,>=1.15.0→2.3.0** (#160)
 - Restore the Glama integration removed in #103: the README Glama score
   badge (after the Downloads badge) and the `glama.json` maintainer
   claim. Glama's Maintenance sub-score used to count planned roadmap
