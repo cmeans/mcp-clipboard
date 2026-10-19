@@ -220,6 +220,17 @@ The client should call `clipboard_paste` and return the content. If you copied a
 
 If nothing happens or you get a tool error, re-run `--check` (whichever runner you used in Step 3) to confirm the package install is healthy, then check your client's MCP server logs (each MCP host exposes them differently; consult your client's documentation).
 
+### Upgrading
+
+A persistent install never updates itself, and `uvx mcp-clipboard` runs the `uv tool install`ed copy when one exists instead of fetching a newer release. Upgrade it explicitly:
+
+```bash
+uv tool upgrade mcp-clipboard   # if you used uv tool install
+pipx upgrade mcp-clipboard      # if you used pipx install
+```
+
+The one-shot runners can also reuse a cached copy. `uvx mcp-clipboard@latest` and `pipx run --no-cache mcp-clipboard` force a fresh check. Run `--version` to confirm which version you have, then restart your MCP client so it launches the new one.
+
 ### Installing from source
 
 If you prefer a local clone instead of installing from PyPI:
