@@ -46,7 +46,7 @@ git tag test-v0.1.x && git push origin test-v0.1.x  # triggers test-publish.yml 
 
 Three-layer design with clean separation:
 
-- **server.py** — MCP server (`FastMCP`, name `mcp_clipboard`) exposing 7 tools:
+- **server.py** — MCP server (`MCPServer` from `mcp.server.mcpserver`, name `mcp_clipboard`) exposing 7 tools:
   - `clipboard_paste(output_format, include_schema, selection)` — Primary tool. Handles any clipboard content: tables → markdown/json/csv; non-tabular → smart formatting (JSON, code, URL, text). Images are returned as base64-encoded image content. Audio/video are detected and reported. `selection` defaults to `"clipboard"`; pass `"primary"` on X11/Wayland to read the middle-click/select-text-to-paste buffer.
   - `clipboard_copy(content)` — Writes text to the system clipboard.
   - `clipboard_copy_markdown(text)` — Renders markdown to HTML and places both formats on the clipboard so paste targets pick the right one. macOS/Windows write both atomically via multi-format clipboard APIs; Wayland/X11 are single-MIME and write only `text/html`.
@@ -70,7 +70,7 @@ Tests use `pytest` with `pytest-asyncio` (async mode: auto). All pytest config i
 ## Key Details
 
 - Python 3.11+ required
-- Runtime dependencies: `mcp[cli]>=1.15.0,<2` (floor: `mcp.types.Icon` first ships in 1.15.0; cap: mcp 2.x renamed `FastMCP`, migration tracked in #157), `markdown-it-py>=3.0` (for `clipboard_copy_markdown` rendering)
+- Runtime dependencies: `mcp[cli]>=2.3,<3` (floor: the 2.x `MCPServer` API, matching mcp-synology; mcp 2.0 removed `mcp.server.fastmcp`, migrated in #157), `markdown-it-py>=3.0` (for `clipboard_copy_markdown` rendering)
 - HTML parsing uses stdlib `html.parser` (no BeautifulSoup)
 - Pytest config is in `pyproject.toml` (no separate pytest.ini)
 - Entry point: `mcp_clipboard.server:main()`
@@ -78,7 +78,7 @@ Tests use `pytest` with `pytest-asyncio` (async mode: auto). All pytest config i
 - `pyproject.toml` `artifacts` setting ensures instruction `.md` files are included in the wheel
 - PyPI package name, command, and import are all `mcp-clipboard` / `mcp_clipboard`
 - Linux with Wayland is tested on real hardware. Windows has been exercised end-to-end on a QEMU Windows guest as of v2.5.x (#129, the UTF-8 stdin encoding bug, was found and fixed via that testing). X11 has unit tests but is unverified on live hardware. macOS is complete with unit tests but has not been exercised on real hardware.
-- `clipboard_paste` intentionally has no return type annotation — adding `-> str | Image` causes FastMCP to fail Pydantic schema generation for `Image`
+- `clipboard_paste` intentionally has no return type annotation — on mcp 1.x, `-> str | Image` made FastMCP fail Pydantic schema generation for `Image`; mcp 2.x accepts it, but adding it is a separate cleanup
 
 ## Conventions
 
