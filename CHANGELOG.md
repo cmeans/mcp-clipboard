@@ -12,7 +12,7 @@ All notable changes to this project will be documented here.
   needs mcp 1.x. Tool names, schemas, annotations, descriptions, icons
   and results are unchanged on the wire. `serverInfo.version` now
   reports the mcp-clipboard version instead of the mcp SDK version.
-  (#TBD) — closes #157
+  (#163) — closes #157
 - **Bump github-actions group: actions/create-github-app-token 3.2.0→3.3.0** (#161)
 - Restore the Glama integration removed in #103: the README Glama score
   badge (after the Downloads badge) and the `glama.json` maintainer
