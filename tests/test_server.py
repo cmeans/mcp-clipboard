@@ -10,7 +10,7 @@ import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from mcp.server.fastmcp.utilities.types import Image
+from mcp.server.mcpserver.utilities.types import Image
 
 from mcp_clipboard.clipboard import (
     ClipboardError,
@@ -1151,7 +1151,7 @@ def test_load_icons_returns_icons():
     for icon in icons:
         assert icon.src.startswith("https://raw.githubusercontent.com/")
         assert icon.src.endswith(".svg")
-        assert icon.mimeType == "image/svg+xml"
+        assert icon.mime_type == "image/svg+xml"
 
 
 # ---------------------------------------------------------------------------

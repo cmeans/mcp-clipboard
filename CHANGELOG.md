@@ -6,6 +6,15 @@ All notable changes to this project will be documented here.
 
 ### Changed
 
+- **Migrate to the mcp 2.x SDK** (`FastMCP` → `MCPServer`). The
+  dependency moves from `mcp[cli]>=1.15.0,<2` to `mcp[cli]>=2.2,<3`, so
+  mcp-clipboard can no longer be installed alongside anything that
+  needs mcp 1.x. The code runs on mcp 2.0.0; the floor is 2.2.0, the
+  first 2.x release with the published SDK security advisories fixed.
+  Tool names, schemas, annotations, descriptions, icons and results
+  are unchanged on the wire. `serverInfo.version` now reports the
+  mcp-clipboard version instead of the mcp SDK version.
+  (#163) — closes #157
 - **Bump github-actions group: actions/create-github-app-token 3.2.0→3.3.0** (#161)
 - Restore the Glama integration removed in #103: the README Glama score
   badge (after the Downloads badge) and the `glama.json` maintainer

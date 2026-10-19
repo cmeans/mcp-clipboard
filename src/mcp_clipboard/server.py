@@ -16,10 +16,10 @@ import platform as _platform
 import re
 import sys
 from pathlib import Path
-from typing import get_args
+from typing import Literal, get_args
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.utilities.types import Image
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.utilities.types import Image
 from mcp.types import Icon
 
 from . import __version__
@@ -86,22 +86,26 @@ def _load_instruction(name: str) -> str:
 def _load_icons() -> list[Icon]:
     """Return Icon objects pointing to hosted SVGs on GitHub."""
     icons = []
-    theme_map = {"light": "mcp-clipboard-logo-light.svg", "dark": "mcp-clipboard-logo-dark.svg"}
+    theme_map: dict[Literal["light", "dark"], str] = {
+        "light": "mcp-clipboard-logo-light.svg",
+        "dark": "mcp-clipboard-logo-dark.svg",
+    }
     for theme, filename in theme_map.items():
         icons.append(
-            Icon(  # type: ignore[call-arg]
+            Icon(
                 src=f"{_ICON_BASE_URL}/{filename}",
-                mimeType="image/svg+xml",
+                mime_type="image/svg+xml",
                 theme=theme,
             )
         )
     return icons
 
 
-mcp = FastMCP(
+mcp = MCPServer(
     "mcp_clipboard",
     instructions=_load_instruction("server"),
     icons=_load_icons(),
+    version=__version__,
 )
 
 
@@ -250,11 +254,11 @@ async def clipboard_paste(
     selection: str = "clipboard",
 ):
     # NOTE: No return type annotation here by design.  The true type is
-    # `str | Image`, but annotating it that way causes FastMCP to call
-    # Pydantic's `create_model()` on the union, which fails because
-    # `mcp.server.fastmcp.utilities.types.Image` has no Pydantic schema.
-    # When/if FastMCP adds native Image support in its output schema path,
-    # add `-> str | Image` and remove this comment.
+    # `str | Image`.  On mcp 1.x, annotating it that way made FastMCP call
+    # Pydantic's `create_model()` on the union, which failed because
+    # `Image` had no Pydantic schema.  mcp 2.x's MCPServer accepts the
+    # annotation (no outputSchema, same results); adding it is a separate
+    # cleanup.
     output_format = output_format.strip().lower()
     if output_format not in _VALID_FORMATS:
         return (
@@ -680,7 +684,7 @@ def main() -> None:
         sys.exit(_run_check())
 
     _configure_logging()
-    # Strip --debug before FastMCP sees argv
+    # Strip --debug before MCPServer sees argv
     sys.argv = [a for a in sys.argv if a != "--debug"]
     mcp.run()
 
