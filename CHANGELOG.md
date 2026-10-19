@@ -4,6 +4,8 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+## [2.6.3] - 2026-10-19
+
 ### Changed
 
 - **Migrate to the mcp 2.x SDK** (`FastMCP` → `MCPServer`). The
@@ -22,7 +24,6 @@ All notable changes to this project will be documented here.
   issues as unanswered support requests; Glama has since fixed that
   metric, and the badge now reads "rated A" with maintenance rated A.
   (#159)
-
 - **Bump github-actions group: actions/checkout 6→7, actions/create-github-app-token 3.1.1→3.2.0, actions/setup-python 6→7, codecov/codecov-action 6→7** (#152)
 
 ## [2.6.2] - 2026-10-07
