@@ -131,7 +131,7 @@ Two required sections:
 
 - Python 3.11+; full type hints; `from __future__ import annotations`.
 - Stdlib-first: no new runtime dependencies without discussion. The
-  only current runtime dep is `mcp[cli]`.
+  current runtime deps are `mcp[cli]` and `markdown-it-py`.
 - Test file names mirror source: `src/mcp_clipboard/parser.py` →
   `tests/test_parser.py`.
 

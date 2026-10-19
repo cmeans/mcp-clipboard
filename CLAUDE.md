@@ -70,7 +70,7 @@ Tests use `pytest` with `pytest-asyncio` (async mode: auto). All pytest config i
 ## Key Details
 
 - Python 3.11+ required
-- Runtime dependencies: `mcp[cli]>=2.3,<3` (floor: the 2.x `MCPServer` API, matching mcp-synology; mcp 2.0 removed `mcp.server.fastmcp`, migrated in #157), `markdown-it-py>=3.0` (for `clipboard_copy_markdown` rendering)
+- Runtime dependencies: `mcp[cli]>=2.2,<3` (mcp 2.0 removed `mcp.server.fastmcp`, migrated to `MCPServer` in #157; the code runs on 2.0.0, but 2.2.0 is the first 2.x release with the published SDK advisories fixed), `markdown-it-py>=3.0` (for `clipboard_copy_markdown` rendering)
 - HTML parsing uses stdlib `html.parser` (no BeautifulSoup)
 - Pytest config is in `pyproject.toml` (no separate pytest.ini)
 - Entry point: `mcp_clipboard.server:main()`
