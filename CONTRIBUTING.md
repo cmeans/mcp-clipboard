@@ -68,6 +68,9 @@ uv run pytest -m integration               # integration tests (real clipboard)
 
 **Integration tests** (`tests/test_integration.py`) exercise real clipboard tools (`wl-paste`, `xclip`, `pbpaste`, etc.) and are skipped by default. Run them with `-m integration` if you have a clipboard daemon available. These are especially useful for platform testers (#5, #10).
 
+For a manual cross-platform checklist and report template, see
+[`docs/testing.md`](docs/testing.md).
+
 Requires **Python 3.11+**. See the [`README → Development`](README.md#development) section for additional commands (build, debug logging, MCP Inspector).
 
 ## PR requirements
