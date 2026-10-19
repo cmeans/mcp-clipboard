@@ -6,6 +6,13 @@ All notable changes to this project will be documented here.
 
 ## [2.6.3] - 2026-10-19
 
+### Added
+
+- README "Upgrading" section: persistent installs (`uv tool install`,
+  `pipx install`) don't update themselves and `uvx mcp-clipboard` runs
+  an installed copy first, so it lists the upgrade commands and how to
+  force the one-shot runners to fetch the latest release. (#164)
+
 ### Changed
 
 - **Migrate to the mcp 2.x SDK** (`FastMCP` → `MCPServer`). The
