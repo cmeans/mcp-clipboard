@@ -4,6 +4,10 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Bump github-actions group: actions/create-github-app-token 3.3.0→3.4.0** (#166)
+
 ## [2.6.3] - 2026-10-19
 
 ### Added
