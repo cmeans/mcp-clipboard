@@ -46,7 +46,7 @@ All notable changes to this project will be documented here.
   Phase 1 covers text formats (text/plain, text/html, text/rtf,
   image/svg+xml); image read/write stays on PowerShell until Phase 2
   (#147) ports it with DIB <-> PNG conversion. Closes #143.
-- **Bump github-actions group: actions/checkout 6→7, actions/create-github-app-token 3.1.1→3.2.0, actions/setup-python 6→7, codecov/codecov-action 6→7** (#152)
+- **Bump github-actions group: actions/create-github-app-token 3.3.0→3.4.0** (#166)
 
 ### Fixed
 - Windows: added a control script (`dev/windows-clipboard-observers.ps1`)
@@ -65,6 +65,34 @@ All notable changes to this project will be documented here.
   observers off the QEMU e2e suite goes from 24/28 PASS to 27/28
   PASS with zero first-attempt race recoveries.
 
+## [2.6.3] - 2026-10-19
+
+### Added
+
+- README "Upgrading" section: persistent installs (`uv tool install`,
+  `pipx install`) don't update themselves and `uvx mcp-clipboard` runs
+  an installed copy first, so it lists the upgrade commands and how to
+  force the one-shot runners to fetch the latest release. (#164)
+
+### Changed
+
+- **Migrate to the mcp 2.x SDK** (`FastMCP` → `MCPServer`). The
+  dependency moves from `mcp[cli]>=1.15.0,<2` to `mcp[cli]>=2.2,<3`, so
+  mcp-clipboard can no longer be installed alongside anything that
+  needs mcp 1.x. The code runs on mcp 2.0.0; the floor is 2.2.0, the
+  first 2.x release with the published SDK security advisories fixed.
+  Tool names, schemas, annotations, descriptions, icons and results
+  are unchanged on the wire. `serverInfo.version` now reports the
+  mcp-clipboard version instead of the mcp SDK version.
+  (#163) — closes #157
+- **Bump github-actions group: actions/create-github-app-token 3.2.0→3.3.0** (#161)
+- Restore the Glama integration removed in #103: the README Glama score
+  badge (after the Downloads badge) and the `glama.json` maintainer
+  claim. Glama's Maintenance sub-score used to count planned roadmap
+  issues as unanswered support requests; Glama has since fixed that
+  metric, and the badge now reads "rated A" with maintenance rated A.
+  (#159)
+- **Bump github-actions group: actions/checkout 6→7, actions/create-github-app-token 3.1.1→3.2.0, actions/setup-python 6→7, codecov/codecov-action 6→7** (#152)
 
 ## [2.6.2] - 2026-10-07
 

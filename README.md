@@ -14,6 +14,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/cmeans/mcp-clipboard/ci.yml?label=CI)](https://github.com/cmeans/mcp-clipboard/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/cmeans/mcp-clipboard/graph/badge.svg)](https://codecov.io/gh/cmeans/mcp-clipboard)
 [![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fpypi-badges.intfar.com%2Fmcp-clipboard%2Fdownloads-30d-non-ci.json)](https://github.com/cmeans/pypi-winnow-downloads)
+[![Glama](https://glama.ai/mcp/servers/cmeans/mcp-clipboard/badges/score.svg)](https://glama.ai/mcp/servers/cmeans/mcp-clipboard)
 
 [![pip downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fpypi-badges.intfar.com%2Fmcp-clipboard%2Finstaller-pip-30d-non-ci.json)](https://pypi.org/project/mcp-clipboard/)
 [![pipenv downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fpypi-badges.intfar.com%2Fmcp-clipboard%2Finstaller-pipenv-30d-non-ci.json)](https://pypi.org/project/mcp-clipboard/)
@@ -219,6 +220,17 @@ The client should call `clipboard_paste` and return the content. If you copied a
 
 If nothing happens or you get a tool error, re-run `--check` (whichever runner you used in Step 3) to confirm the package install is healthy, then check your client's MCP server logs (each MCP host exposes them differently; consult your client's documentation).
 
+### Upgrading
+
+A persistent install never updates itself, and `uvx mcp-clipboard` runs the `uv tool install`ed copy when one exists instead of fetching a newer release. Upgrade it explicitly:
+
+```bash
+uv tool upgrade mcp-clipboard   # if you used uv tool install
+pipx upgrade mcp-clipboard      # if you used pipx install
+```
+
+The one-shot runners can also reuse a cached copy. `uvx mcp-clipboard@latest` and `pipx run --no-cache mcp-clipboard` force a fresh check. Run `--version` to confirm which version you have, then restart your MCP client so it launches the new one.
+
 ### Installing from source
 
 If you prefer a local clone instead of installing from PyPI:
@@ -409,6 +421,7 @@ mcp-clipboard/
 ├── pyproject.toml
 ├── CHANGELOG.md
 ├── CLAUDE.md                # Claude Code project guidance
+├── glama.json               # Glama MCP registry metadata
 ├── LICENSE                  # Apache 2.0
 └── README.md
 ```
