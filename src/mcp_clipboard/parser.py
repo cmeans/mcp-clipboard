@@ -148,6 +148,34 @@ class _TextExtractor(HTMLParser):
             self._pieces.append(data)
 
 
+# The Windows CF_HTML ("HTML Format") header: a "Version:<digits>.<digits>"
+# line, then the documented description keys (StartHTML, EndHTML,
+# StartFragment, EndFragment, StartSelection, EndSelection with numeric
+# offsets, and SourceURL), before the HTML itself. At least one offset or
+# SourceURL line must follow the Version line, digits are ASCII only, and
+# only those shapes are matched, so ordinary HTML whose first line is
+# "Version: draft" or "Version:2.0", or a body line that looks like
+# "Word: value", is never stripped. Lines may end in CRLF, LF or CR.
+_CF_HTML_EOL = r"(?:\r\n|\r|\n)"
+_CF_HTML_HEADER = re.compile(
+    r"\AVersion:\d+\.\d+" + _CF_HTML_EOL + r"(?:(?:(?:Start|End)(?:HTML|Fragment|Selection):-?\d+"
+    r"|SourceURL:[^\r\n]*)" + _CF_HTML_EOL + r")+",
+    re.ASCII,
+)
+
+
+def strip_cf_html_header(html: str) -> str:
+    """Remove a Windows CF_HTML header, if present, leaving the HTML.
+
+    Windows stores text/html with a plain-text header of byte offsets
+    ahead of the document. Left in place, extract_html_text would show
+    that header to the model as part of the text. HTML without the
+    header is returned unchanged.
+    """
+    match = _CF_HTML_HEADER.match(html)
+    return html[match.end() :] if match else html
+
+
 def extract_html_text(html: str) -> str:
     """Strip HTML tags and return readable plain text.
 

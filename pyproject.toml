@@ -28,6 +28,12 @@ keywords = ["clipboard", "mcp", "claude", "paste", "spreadsheet", "table"]
 dependencies = [
     "mcp[cli]>=2.2,<3",
     "markdown-it-py>=3.0",
+    # pywin32 backs the direct Win32 clipboard backend in clipboard_win32.py
+    # on Windows hosts. Marker constrains the install to Windows so Linux /
+    # macOS / WSL do not fetch the Windows-only wheel. mcp itself already
+    # requires pywin32>=311 on Windows, so this makes the dependency explicit
+    # for the path we use, with the same floor.
+    "pywin32>=311; sys_platform == 'win32'",
 ]
 
 [project.scripts]

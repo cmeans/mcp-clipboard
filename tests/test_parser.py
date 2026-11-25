@@ -10,6 +10,7 @@ from mcp_clipboard.parser import (
     infer_column_types,
     parse_html_table,
     parse_tsv,
+    strip_cf_html_header,
 )
 
 # ---------------------------------------------------------------------------
@@ -902,3 +903,53 @@ def test_format_confluence_escapes_same_as_jira():
     rows = [["A"], ["x|y"]]
     assert format_table(rows, "confluence") == format_table(rows, "jira")
     assert r"x\|y" in format_table(rows, "confluence")
+
+
+# ---------------------------------------------------------------------------
+# CF_HTML header stripping
+# ---------------------------------------------------------------------------
+
+
+def test_strip_cf_html_header_removes_header():
+    from mcp_clipboard.clipboard import _windows_html_clipboard_wrap
+
+    wrapped = _windows_html_clipboard_wrap("<p>caf\u00e9 \U0001f600</p>")
+    assert strip_cf_html_header(wrapped) == (
+        "<html><body><!--StartFragment--><p>caf\u00e9 \U0001f600</p><!--EndFragment--></body></html>"
+    )
+
+
+def test_strip_cf_html_header_with_source_url_and_lf_endings():
+    raw = (
+        "Version:1.0\nStartHTML:0000000150\nEndHTML:0000000200\n"
+        "StartFragment:0000000160\nEndFragment:0000000190\n"
+        "SourceURL:https://example.com/a?b=c\n<html><body>x</body></html>"
+    )
+    assert strip_cf_html_header(raw) == "<html><body>x</body></html>"
+
+
+def test_strip_cf_html_header_leaves_plain_html_alone():
+    for html in ("<p>Version: 2</p>", "", "Version:1.0", "text\nVersion:1.0\n<p>x</p>"):
+        assert strip_cf_html_header(html) == html
+
+
+def test_strip_cf_html_header_cr_only_line_endings():
+    raw = "Version:0.9\rStartHTML:1\rEndHTML:2\r<html>x</html>"
+    assert strip_cf_html_header(raw) == "<html>x</html>"
+
+
+def test_strip_cf_html_header_keeps_key_value_shaped_body_line():
+    raw = "Version:0.9\r\nStartHTML:1\r\nNote: total 5\r\n<b>x</b>"
+    assert strip_cf_html_header(raw) == "Note: total 5\r\n<b>x</b>"
+
+
+def test_strip_cf_html_header_needs_cf_html_shapes():
+    """Only a numeric Version and numeric offsets count as a CF_HTML header."""
+    draft = "Version: draft\n<p>body</p>"
+    assert strip_cf_html_header(draft) == draft
+    malformed = "Version:0.9\r\nStartHTML:10\r\nStartFragment:1<b>body</b>\r\n<p>more</p>"
+    assert strip_cf_html_header(malformed) == "StartFragment:1<b>body</b>\r\n<p>more</p>"
+    version_only = "Version:2.0\n<p>body</p>"
+    assert strip_cf_html_header(version_only) == version_only
+    fullwidth = "Version:\uff10.\uff19\r\nStartHTML:\uff11\r\n<b>x</b>"
+    assert strip_cf_html_header(fullwidth) == fullwidth

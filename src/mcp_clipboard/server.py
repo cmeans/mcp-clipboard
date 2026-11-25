@@ -45,6 +45,7 @@ from .parser import (
     infer_column_types,
     parse_html_table,
     parse_tsv,
+    strip_cf_html_header,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,7 +170,8 @@ async def _read_clipboard_content(
     """Read clipboard and attempt to extract tabular data.
 
     Returns (rows, html, text) where rows may be empty if no table found.
-    html and text are the raw clipboard content (may be empty on error).
+    html is the clipboard HTML with any Windows CF_HTML header stripped;
+    text is the plain-text content. Either may be empty on error.
     """
     rows: list[list[str]] = []
     html = ""
@@ -177,7 +179,7 @@ async def _read_clipboard_content(
 
     # Strategy 1: Try HTML clipboard (most reliable for spreadsheets)
     try:
-        html = await read_clipboard("text/html", selection)
+        html = strip_cf_html_header(await read_clipboard("text/html", selection))
         if html:
             rows = parse_html_table(html)
     except ClipboardError as e:
@@ -667,6 +669,17 @@ def _run_check() -> int:
         print("Backend: NOT AVAILABLE", file=sys.stderr)
         print(f"  {e}", file=sys.stderr)
         return 1
+    if backend == "windows":
+        # Text formats on Windows need pywin32, a real runtime dependency;
+        # detection alone (platform.system()) can't tell a broken install.
+        from . import clipboard_win32
+
+        try:
+            clipboard_win32._import_win32clipboard()
+        except ImportError as e:
+            print("Backend: NOT AVAILABLE", file=sys.stderr)
+            print(f"  {e}", file=sys.stderr)
+            return 1
     print(f"Backend: {backend} (detected)")
     print("OK: mcp-clipboard should work on this system.")
     return 0
