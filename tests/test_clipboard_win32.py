@@ -820,7 +820,7 @@ def test_write_payloads_no_post_write_verify(clipboard_win32, fake_win32clipboar
 def test_write_payloads_no_seq_number_sampling(clipboard_win32, fake_win32clipboard):
     """Architectural invariant: the write path must NOT call
     GetClipboardSequenceNumber. A passive seq-number canary tried
-    during #146 bracketed bracketing the transaction as
+    during #146 bracketed the transaction as
     an observation-only diagnostic. QEMU re-test with chain observers
     DISABLED showed the canary itself measurably degraded the race
     posture: 0/6 race-bucket PASS vs the canary-free 6/6 baseline on

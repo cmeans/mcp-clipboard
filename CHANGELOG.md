@@ -45,8 +45,8 @@ All notable changes to this project will be documented here.
   stdin / stdout codepage transcoding that lossy-ified non-ASCII
   codepoints. The new backend in `mcp_clipboard/clipboard_win32.py`
   keeps clipboard access inside the long-lived MCP-server Python
-  process and calls the standard Win32 clipboard API directly via
-  `pywin32`, the write pattern Microsoft documents and Chromium uses.
+  process and calls the standard Win32 clipboard API directly through
+  `pywin32` and `ctypes`, the write pattern Microsoft documents and Chromium uses.
   Writes are `OpenClipboard` -> `EmptyClipboard` -> per
   format `GlobalAlloc(GMEM_MOVEABLE)` + `GlobalLock` / copy /
   `GlobalUnlock` + `SetClipboardData` -> `CloseClipboard`, so
@@ -65,7 +65,8 @@ All notable changes to this project will be documented here.
   the CF_HTML header (`Version:`, `StartHTML:` and the other offsets)
   from Windows HTML before parsing, so it no longer reaches the model
   as text; `clipboard_read_raw` still returns the stored bytes as they
-  are. (#146), closes #143
+  are. On Windows, `mcp-clipboard --check` now imports pywin32 and
+  reports a broken install instead of printing OK. (#146), closes #143
 - **Bump github-actions group: actions/create-github-app-token 3.3.0→3.4.0** (#166)
 
 ## [2.6.3] - 2026-10-19

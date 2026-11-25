@@ -4354,6 +4354,43 @@ def test_cli_check_failure_returns_1(capsys, monkeypatch):
     assert "wl-paste" in captured.err
 
 
+def test_cli_check_windows_reports_broken_pywin32(capsys):
+    """On Windows, --check imports pywin32 and fails with its message
+    instead of printing OK when pywin32 is broken."""
+    from mcp_clipboard import clipboard_win32
+    from mcp_clipboard.server import _run_check
+
+    with (
+        patch("mcp_clipboard.server._detect_backend", return_value="windows"),
+        patch.object(
+            clipboard_win32,
+            "_import_win32clipboard",
+            side_effect=ImportError("pywin32 failed to import (DLL load failed)."),
+        ),
+    ):
+        rc = _run_check()
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "NOT AVAILABLE" in captured.err
+    assert "DLL load failed" in captured.err
+    assert "OK" not in captured.out
+
+
+def test_cli_check_windows_ok_when_pywin32_imports(capsys):
+    from mcp_clipboard import clipboard_win32
+    from mcp_clipboard.server import _run_check
+
+    with (
+        patch("mcp_clipboard.server._detect_backend", return_value="windows"),
+        patch.object(clipboard_win32, "_import_win32clipboard", return_value=object()),
+    ):
+        rc = _run_check()
+
+    assert rc == 0
+    assert "OK" in capsys.readouterr().out
+
+
 def test_cli_check_dispatches_through_main(monkeypatch):
     """`mcp-clipboard --check` exits via sys.exit(rc) and never reaches mcp.run."""
     from mcp_clipboard.server import main

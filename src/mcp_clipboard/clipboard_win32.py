@@ -549,7 +549,8 @@ def _encode_for_format(fmt_id: int, content: str, win32clipboard: Any) -> bytes:
 #
 # One Open + Empty + N x SetClipboardData + Close per write call, the
 # pattern in Microsoft's SetClipboardData documentation. Retries happen
-# only on OpenClipboard contention (_open_clipboard_with_retry); there is
+# only around OpenClipboard (_open_clipboard_with_retry, which retries any
+# OpenClipboard failure; see #169); there is
 # no retry on SetClipboardData and no post-write IsClipboardFormatAvailable
 # verify. The post-write verify-retry and the sequence-number canary tried
 # during #146 both made the observer race worse in QEMU testing; see the

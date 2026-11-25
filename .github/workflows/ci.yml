@@ -83,7 +83,8 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   integration-windows:
-    # Closes the QEMU manual-test loop. The pywin32 Win32 clipboard backend
+    # Round-trips the Win32 layer on a real clipboard on every push (the QEMU
+    # e2e run still covers end to end). The pywin32 Win32 clipboard backend
     # in clipboard_win32.py is exercisable directly on a windows-latest
     # runner -- real Windows Server 2025 with a real session and a real
     # clipboard, no virtualization indirection. Per-push integration coverage

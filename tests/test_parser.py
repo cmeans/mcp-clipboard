@@ -947,5 +947,9 @@ def test_strip_cf_html_header_needs_cf_html_shapes():
     """Only a numeric Version and numeric offsets count as a CF_HTML header."""
     draft = "Version: draft\n<p>body</p>"
     assert strip_cf_html_header(draft) == draft
-    malformed = "Version:0.9\r\nStartFragment:1<b>body</b>"
-    assert strip_cf_html_header(malformed) == "StartFragment:1<b>body</b>"
+    malformed = "Version:0.9\r\nStartHTML:10\r\nStartFragment:1<b>body</b>\r\n<p>more</p>"
+    assert strip_cf_html_header(malformed) == "StartFragment:1<b>body</b>\r\n<p>more</p>"
+    version_only = "Version:2.0\n<p>body</p>"
+    assert strip_cf_html_header(version_only) == version_only
+    fullwidth = "Version:\uff10.\uff19\r\nStartHTML:\uff11\r\n<b>x</b>"
+    assert strip_cf_html_header(fullwidth) == fullwidth

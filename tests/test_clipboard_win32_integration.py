@@ -1,9 +1,9 @@
 """Integration tests for the Win32 clipboard backend.
 
 Round-trips text/plain (with non-ASCII codepoints), text/html, text/rtf, and
-image/svg+xml through the real Windows clipboard via clipboard_win32. These
-tests are the per-push CI replacement for the QEMU manual-test loop the old
-PowerShell-subprocess backend forced.
+image/svg+xml through the real Windows clipboard via clipboard_win32 on
+every push. They cover the Win32 layer only; the QEMU e2e run still covers
+the tools end to end.
 
 Skip on non-Windows hosts. The sys_platform marker on pywin32 in pyproject.toml
 means the import would also fail elsewhere, but we skip explicitly so a CI

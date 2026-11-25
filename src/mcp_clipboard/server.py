@@ -669,6 +669,17 @@ def _run_check() -> int:
         print("Backend: NOT AVAILABLE", file=sys.stderr)
         print(f"  {e}", file=sys.stderr)
         return 1
+    if backend == "windows":
+        # Text formats on Windows need pywin32, a real runtime dependency;
+        # detection alone (platform.system()) can't tell a broken install.
+        from . import clipboard_win32
+
+        try:
+            clipboard_win32._import_win32clipboard()
+        except ImportError as e:
+            print("Backend: NOT AVAILABLE", file=sys.stderr)
+            print(f"  {e}", file=sys.stderr)
+            return 1
     print(f"Backend: {backend} (detected)")
     print("OK: mcp-clipboard should work on this system.")
     return 0
