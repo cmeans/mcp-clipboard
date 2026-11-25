@@ -4,7 +4,7 @@ Detection order:
   1. Wayland (wl-paste / wl-copy)
   2. X11 (xclip)
   3. macOS (osascript / pbpaste / pbcopy)
-  4. Windows (PowerShell)
+  4. Windows (pywin32; PowerShell for images until Phase 2, #147)
 """
 
 from __future__ import annotations

@@ -464,7 +464,9 @@ async def test_paste_windows_cf_html_header_not_shown():
 
 @pytest.mark.asyncio
 async def test_paste_windows_cf_html_table_still_parsed():
-    """A table inside a CF_HTML wrapper still parses after the header is stripped."""
+    """A table inside a CF_HTML wrapper still parses after the header is
+    stripped (a regression guard for the table path, which never showed
+    the header)."""
     from mcp_clipboard.clipboard import _windows_html_clipboard_wrap
 
     with patch(
@@ -473,8 +475,8 @@ async def test_paste_windows_cf_html_table_still_parsed():
     ):
         result = await clipboard_paste()
 
-    assert "|" in result
-    assert "Version:" not in result
+    assert "3 rows \N{MULTIPLICATION SIGN} 3 columns" in result
+    assert "| Alice | 30  | Portland |" in result
 
 
 @pytest.mark.asyncio

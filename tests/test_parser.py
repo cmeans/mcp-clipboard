@@ -931,3 +931,13 @@ def test_strip_cf_html_header_with_source_url_and_lf_endings():
 def test_strip_cf_html_header_leaves_plain_html_alone():
     for html in ("<p>Version: 2</p>", "", "Version:1.0", "text\nVersion:1.0\n<p>x</p>"):
         assert strip_cf_html_header(html) == html
+
+
+def test_strip_cf_html_header_cr_only_line_endings():
+    raw = "Version:0.9\rStartHTML:1\rEndHTML:2\r<html>x</html>"
+    assert strip_cf_html_header(raw) == "<html>x</html>"
+
+
+def test_strip_cf_html_header_keeps_key_value_shaped_body_line():
+    raw = "Version:0.9\r\nStartHTML:1\r\nNote: total 5\r\n<b>x</b>"
+    assert strip_cf_html_header(raw) == "Note: total 5\r\n<b>x</b>"

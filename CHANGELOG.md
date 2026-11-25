@@ -10,18 +10,19 @@ All notable changes to this project will be documented here.
   across Python 3.11 / 3.12 / 3.13 with `fail-fast: false`. The Linux
   cell preserves coverage upload to Codecov; the other cells just run
   the tests. Per-push verification of the platform-specific code paths
-  replaces what previously required a manual QEMU round-trip.
+  replaces what previously required a manual QEMU round-trip. (#146)
 - **`integration-windows` CI job.** Exercises the new pywin32-backed
   Windows clipboard against a real Windows Server 2025 session via the
   new `tests/test_clipboard_win32_integration.py` suite (round-trips
   text/plain with non-ASCII, text/html, text/rtf, image/svg+xml,
   multi-format atomic writes, list_formats; the tests self-skip on
   non-Windows so they are harmless on local Linux pytest runs). (#146)
-- **Windows clipboard-observers control script.**
-  `dev/windows-clipboard-observers.ps1` disables the documented Windows
-  clipboard chain observers (`cbdhsvc` Clipboard History service, Cloud
-  Clipboard sync, Suggested Actions text extractor) for users who need
-  zero-flake clipboard behavior. The script captures current state,
+- **Windows clipboard-observers test script.**
+  `dev/windows-clipboard-observers.ps1` (in the repository, not the
+  installed package) disables the documented Windows clipboard chain
+  observers (`cbdhsvc` Clipboard History service, Cloud Clipboard sync,
+  Suggested Actions text extractor) for test runs that need zero-flake
+  clipboard behavior. The script captures current state,
   applies test values, and `-Mode Restore` puts back the values it
   captured. The race the script works around is the asynchronously-posted `WM_CLIPBOARDUPDATE`
   notification on Windows 11 (per [Microsoft Q&A 1327362](https://learn.microsoft.com/en-us/answers/questions/1327362/wm-clipboardupdate-issue)),
@@ -29,9 +30,8 @@ All notable changes to this project will be documented here.
   `CloseClipboard` and overwrite our content. This is the same race
   every mature Windows clipboard library lives with (Chromium, Qt,
   clipboard-win, pyperclip, .NET WinForms) and has no published fix.
-  We empirically confirmed the script eliminates the symptom: with
-  observers off the QEMU e2e suite goes from 24/28 PASS to 27/28
-  PASS with zero first-attempt race recoveries. (#146)
+  With observers off, the QEMU e2e suite went from 24/28 PASS to
+  27/28 PASS with zero first-attempt race recoveries. (#146)
 
 ### Changed
 - **Windows backend rewritten on top of `pywin32`.** Earlier versions
