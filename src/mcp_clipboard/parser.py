@@ -148,15 +148,17 @@ class _TextExtractor(HTMLParser):
             self._pieces.append(data)
 
 
-# The Windows CF_HTML ("HTML Format") header: a "Version:" line, then the
-# documented description keys (StartHTML, EndHTML, StartFragment,
-# EndFragment, StartSelection, EndSelection, SourceURL), before the HTML
-# itself. Only those keys are matched, so a body line that happens to look
-# like "Word: value" is never stripped. Lines may end in CRLF, LF or CR.
+# The Windows CF_HTML ("HTML Format") header: a "Version:<digits>.<digits>"
+# line, then the documented description keys (StartHTML, EndHTML,
+# StartFragment, EndFragment, StartSelection, EndSelection with numeric
+# offsets, and SourceURL), before the HTML itself. Only those shapes are
+# matched, so ordinary HTML whose first line is "Version: draft", or a body
+# line that looks like "Word: value", is never stripped. Lines may end in
+# CRLF, LF or CR.
 _CF_HTML_EOL = r"(?:\r\n|\r|\n)"
 _CF_HTML_HEADER = re.compile(
-    r"\AVersion:[^\r\n]*" + _CF_HTML_EOL + r"(?:(?:StartHTML|EndHTML|StartFragment|EndFragment"
-    r"|StartSelection|EndSelection|SourceURL):[^\r\n]*" + _CF_HTML_EOL + r")*"
+    r"\AVersion:\d+\.\d+" + _CF_HTML_EOL + r"(?:(?:(?:Start|End)(?:HTML|Fragment|Selection):-?\d+"
+    r"|SourceURL:[^\r\n]*)" + _CF_HTML_EOL + r")*"
 )
 
 

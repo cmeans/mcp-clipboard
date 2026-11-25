@@ -9,8 +9,9 @@ All notable changes to this project will be documented here.
   unit-test suite on `ubuntu-latest`, `windows-latest`, and `macos-latest`
   across Python 3.11 / 3.12 / 3.13 with `fail-fast: false`. The Linux
   cell preserves coverage upload to Codecov; the other cells just run
-  the tests. Per-push verification of the platform-specific code paths
-  replaces what previously required a manual QEMU round-trip. (#146)
+  the tests. The matrix cells mock the clipboard backend; the
+  `integration-windows` job below round-trips the Win32 layer on a real
+  Windows clipboard. Neither replaces the end-to-end QEMU run. (#146)
 - **`integration-windows` CI job.** Exercises the new pywin32-backed
   Windows clipboard against a real Windows Server 2025 session via the
   new `tests/test_clipboard_win32_integration.py` suite (round-trips
@@ -45,8 +46,8 @@ All notable changes to this project will be documented here.
   codepoints. The new backend in `mcp_clipboard/clipboard_win32.py`
   keeps clipboard access inside the long-lived MCP-server Python
   process and calls the standard Win32 clipboard API directly via
-  `pywin32`, the same pattern Chromium, Qt, clipboard-win, and
-  pyperclip use. Writes are `OpenClipboard` -> `EmptyClipboard` -> per
+  `pywin32`, the write pattern Microsoft documents and Chromium uses.
+  Writes are `OpenClipboard` -> `EmptyClipboard` -> per
   format `GlobalAlloc(GMEM_MOVEABLE)` + `GlobalLock` / copy /
   `GlobalUnlock` + `SetClipboardData` -> `CloseClipboard`, so
   multi-format writes (`clipboard_copy_markdown`) land in one

@@ -26,9 +26,9 @@ write is atomic between OpenClipboard and CloseClipboard; clipboard
 chain observers can still overwrite it afterward (see below).
 
 **Write path: raw SetClipboardData with GlobalAlloc(GMEM_MOVEABLE) HGLOBALs.**
-This is the canonical Win32 clipboard write pattern used by Chromium
-(`ui/base/clipboard/clipboard_win.cc`), pyperclip, pyclip, and every
-mature non-WPF Windows clipboard writer. The flow is:
+This is the write pattern Microsoft documents for SetClipboardData,
+and the one Chromium uses (`ui/base/clipboard/clipboard_win.cc`). The
+flow is:
 
   OpenClipboard(owner_hwnd) -> EmptyClipboard() ->
     for each (format_id, payload):
@@ -48,35 +48,32 @@ the notification is asynchronously POSTED on Windows 11, so
 observers (Clipboard History service `cbdhsvc`, Cloud Clipboard,
 Suggested Actions text extractor, OneDrive, antivirus, third-party
 clipboard managers) can re-open the clipboard immediately after our
-CloseClipboard and overwrite our content. Commit 75bcb0f added a
-.NET-shaped 10x100ms verify-retry on top of this path to mitigate
-the symptom. QEMU testing showed it made the race STRICTLY WORSE
-(race-bucket reruns went 4/6 PASS on dev11 to 0/6 PASS on dev12)
-because each verify pair generates an additional WM_CLIPBOARDUPDATE
-notification that amplifies observer contention. The mitigation was
-reverted in the next commit. Every major Windows clipboard library
-matches the no-post-write-verify shape we now use: Chromium,
-clipboard-win (the Rust FFI behind arboard), pyperclip, pyclip, Qt's
-non-retry path. The .NET WinForms `Clipboard.SetDataObject(data,
-copy, 10, 100)` retry famously cited as "the standard tax" is on
-the OpenClipboard contention side, not on post-write verify.
+CloseClipboard and overwrite our content. During #146 a
+.NET-shaped 10x100ms post-write verify-retry was tried on top of this
+path. QEMU testing showed it made the race STRICTLY WORSE (the race
+reruns went from 4/6 PASS to 0/6 PASS) because each verify pair
+generates an additional WM_CLIPBOARDUPDATE notification that amplifies
+observer contention, so it was removed. The .NET WinForms
+`Clipboard.SetDataObject(data, copy, 10, 100)` retry often cited as
+"the standard tax" is on the OpenClipboard contention side, not a
+post-write verify.
 
-The race remains. Affected users (typically anyone with Windows 11
-Clipboard History on, which is the default) can disable the
-documented Microsoft observers via the control script at
-dev/windows-clipboard-observers.ps1 for a zero-flake run.
+The race remains: on Windows 11 with Clipboard History on (the
+default), an observer can overwrite a write. For test machines only,
+dev/windows-clipboard-observers.ps1 switches the documented Microsoft
+observers off. It is a test-VM tool, not a fix for users: it needs
+Administrator, changes machine-wide policy for every user, stops
+services and asks for a reboot.
 
-We previously added a passive sequence-number canary at the write
-boundary (two `GetClipboardSequenceNumber` calls bracketing the
-Open/Empty/Set/Close transaction) intended as observation-only
-diagnostic. QEMU re-tested with chain observers DISABLED to isolate
-the canary's effect; the result was 0/6 race-bucket PASS and six
-in-suite 1st-attempt recoveries on a posture that without the
-canary produced 6/6 race-bucket PASS and zero recoveries. Even a
-"passive" instrumentation pass measurably changed the race timing
-on real Windows 11 desktops. The canary was removed in the next
-commit. The lesson is in the public commit history: do not add
-work to the write hot path even when it looks free.
+A passive sequence-number canary at the write boundary (two
+`GetClipboardSequenceNumber` calls bracketing the
+Open/Empty/Set/Close transaction) was also tried during #146 as an
+observation-only diagnostic. QEMU re-tested with chain observers
+DISABLED to isolate its effect: 0/6 race PASS and six in-suite
+first-attempt recoveries, on a setup that without the canary produced
+6/6 PASS and zero recoveries. Even "passive" instrumentation measurably
+changed the race timing on real Windows 11, so it was removed. Do not
+add work to the write hot path even when it looks free.
 
 **Why not OleSetClipboard / OleFlushClipboard?** OLE is for delayed
 rendering, cross-process drag-drop, and IDataObject-based marshaling.
@@ -88,8 +85,8 @@ lived MCP server with no UI message pump, those messages queue forever;
 consumers (clipboard managers, OneDrive shell extensions, antivirus)
 that walk our formats hit a 30-second WM_RENDERFORMAT timeout and
 synthesize their own clipboard copy in self-defense -- presenting to
-us as "our write was silently overwritten" (the PR #146 e2e flake
-across commits 8535045 / 3078f35 / ec6d6a5 / 6837c36). Raw
+us as "our write was silently overwritten" (the e2e flake seen while
+an OLE-based write path was tried during #146). Raw
 SetClipboardData with materialized HGLOBALs has no hidden window and
 no rendering round-trip, eliminating the entire failure mode.
 
@@ -101,8 +98,8 @@ non-NULL but no consumer can read the format -- the same silent
 no-op symptom). pywin32's high-level `SetClipboardData(fmt, bytes)`
 wrapper does allocate GMEM_MOVEABLE internally, so the silent no-op
 seen on the pre-OLE write path (before this rewrite) was a separate
-bug -- the clipboard-owner window problem fixed in commit 25b2b49
-(use a process-owned message-only window).
+bug -- the clipboard-owner window problem, fixed during #146 by
+opening the clipboard with a process-owned message-only window.
 
 **Read path: OpenClipboard + GetClipboardData.** Unchanged from
 earlier revisions. OLE was never required for reads; only the
@@ -158,8 +155,9 @@ logger = logging.getLogger(__name__)
 # Driving the allocation ourselves via ctypes (rather than going through
 # pywin32's SetClipboardData(fmt, bytes) helper) makes the GMEM_MOVEABLE
 # flag explicit and removes any ambiguity about what allocation strategy
-# the wrapper happens to be using. Matches Chromium's
-# `CreateGlobalData()` byte-for-byte except for the language.
+# the wrapper happens to be using. Unlike Chromium's `CreateGlobalData()`,
+# which allocates one extra character and writes a NUL terminator, the
+# payload is copied as-is: callers that need a terminator include it.
 
 _GMEM_MOVEABLE = 0x0002
 _GMEM_ZEROINIT = 0x0040
@@ -191,8 +189,8 @@ def _allocate_hglobal(payload: bytes) -> int:
     return the integer handle.
 
     The caller transfers ownership to SetClipboardData on success
-    (system owns the handle and will GlobalFree it when the clipboard
-    is emptied or this process exits). On any failure path BEFORE
+    (the system owns the handle and frees it when the clipboard is next
+    emptied; the data outlives this process). On any failure path BEFORE
     SetClipboardData succeeds, the caller MUST GlobalFree the handle
     we return -- the system has not taken ownership yet.
 
@@ -316,9 +314,9 @@ def _get_clipboard_hwnd() -> int:
     ownership of the global memory handle; the clipboard owner being torn
     down doesn't invalidate the data.
 
-    Pattern matches pyperclip's process-owned message window for the
-    same reason. Chromium uses base::win::MessageWindow for this; ours
-    is the same shape (HWND_MESSAGE parent, STATIC class, message-only).
+    Chromium uses a message-only window (base::win::MessageWindow) for
+    the same purpose; ours is HWND_MESSAGE-parented, STATIC class,
+    created once and cached.
     """
     global _owner_hwnd
     if _owner_hwnd is not None:
@@ -549,41 +547,15 @@ def _encode_for_format(fmt_id: int, content: str, win32clipboard: Any) -> bytes:
 
 # --- Write transaction ----------------------------------------------------
 #
-# One Open + Empty + N x SetClipboardData + Close per write call. Matches
-# Chromium WritePortableAndPlatformRepresentations() and the canonical
-# Win32 example in Microsoft docs. No retry on SetClipboardData success,
-# no post-write IsClipboardFormatAvailable verify. This matches every
-# major Windows clipboard library: Chromium retries 5x5ms on
-# OpenClipboard contention only; Qt retries OleSetClipboard 3x100ms on
-# CLIPBRD_E_CANT_OPEN only; clipboard-win does no retry at all; .NET
-# WinForms' 10x100ms tax is also on the OpenClipboard side, not on
-# post-write verify. The atomicity guarantees of the clipboard chain
-# are enforced by the OS between Open and Close.
-#
-# Earlier revisions added a write-side verify-retry on top of this
-# path (dev12 / commit 75bcb0f). QEMU testing showed it made the race
-# STRICTLY WORSE under active chain observers: each retry generates
-# an additional WM_CLIPBOARDUPDATE notification that amplifies
-# observer contention. The race-bucket reruns on dev12 produced
-# 0/6 PASS vs dev11's 4/6 PASS with the same observers active. A
-# second attempt (dev13 / commit ab05aef) added a passive sequence-
-# number canary -- two GetClipboardSequenceNumber calls bracketing
-# the Open/Empty/Set/Close transaction, intended as observation-only
-# diagnostic. QEMU re-tested with chain observers DISABLED to isolate
-# the canary's effect; the result was 0/6 race-bucket PASS and six
-# in-suite 1st-attempt recoveries on a posture that on dev11 had
-# produced 6/6 race-bucket PASS and zero recoveries. The canary
-# itself, despite being structurally passive (no clipboard handle
-# taken, no extra WM_CLIPBOARDUPDATE generated), measurably changed
-# the race timing -- likely by introducing CPU work on the worker
-# thread immediately around the transaction window. Both mitigations
-# are now removed. The wrapper is the bare canonical Win32 pattern,
-# matching the published state of the art across every major
-# library. The race-bucket result is what every Windows clipboard
-# library lives with under active chain observers. See
-# dev/windows-clipboard-observers.ps1 for a control script that
-# disables the documented Microsoft observers for users who need
-# zero-flake behavior.
+# One Open + Empty + N x SetClipboardData + Close per write call, the
+# pattern in Microsoft's SetClipboardData documentation. Retries happen
+# only on OpenClipboard contention (_open_clipboard_with_retry); there is
+# no retry on SetClipboardData and no post-write IsClipboardFormatAvailable
+# verify. The post-write verify-retry and the sequence-number canary tried
+# during #146 both made the observer race worse in QEMU testing; see the
+# module docstring. The observer race itself remains;
+# dev/windows-clipboard-observers.ps1 switches the observers off on test
+# machines only (see the module docstring).
 
 
 def _write_payloads(payloads: dict[int, bytes]) -> None:

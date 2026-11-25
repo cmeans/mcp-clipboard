@@ -941,3 +941,11 @@ def test_strip_cf_html_header_cr_only_line_endings():
 def test_strip_cf_html_header_keeps_key_value_shaped_body_line():
     raw = "Version:0.9\r\nStartHTML:1\r\nNote: total 5\r\n<b>x</b>"
     assert strip_cf_html_header(raw) == "Note: total 5\r\n<b>x</b>"
+
+
+def test_strip_cf_html_header_needs_cf_html_shapes():
+    """Only a numeric Version and numeric offsets count as a CF_HTML header."""
+    draft = "Version: draft\n<p>body</p>"
+    assert strip_cf_html_header(draft) == draft
+    malformed = "Version:0.9\r\nStartFragment:1<b>body</b>"
+    assert strip_cf_html_header(malformed) == "StartFragment:1<b>body</b>"

@@ -121,7 +121,7 @@ macOS and Windows have everything they need built in. Linux needs one CLI utilit
 | **Ubuntu / Debian (Wayland)** | `wl-copy` / `wl-paste` | `sudo apt install wl-clipboard` |
 | **Linux (X11)** | `xclip` | `sudo dnf install xclip` or `sudo apt install xclip` |
 | **macOS** | Built-in | No install needed (`pbcopy` / `pbpaste`) |
-| **Windows** | Built-in | No install needed (PowerShell) |
+| **Windows** | pywin32 (installed automatically) | No extra install needed (PowerShell is still used for images) |
 
 > **Platform status:** Linux with Wayland is tested and actively used. Windows has been exercised end-to-end on a QEMU Windows guest (a real Windows-only encoding bug, [#129](https://github.com/cmeans/mcp-clipboard/issues/129), was found and fixed via that testing in v2.5.x). X11 and macOS implementations are complete but unverified beyond the unit tests. Bug reports and PRs are welcome.
 
@@ -353,7 +353,7 @@ If you have access to a custom system prompt (e.g. in a Claude Desktop project o
 
 ## How It Works
 
-1. **Platform detection:** At startup, the server detects your clipboard backend (Wayland, X11, macOS, or Windows) and selects the appropriate system commands.
+1. **Platform detection:** At startup, the server detects your clipboard backend (Wayland, X11, macOS, or Windows) and selects the matching clipboard commands or APIs.
 2. **Reading (`clipboard_paste`):** Calls the platform's clipboard read command. Tries `text/html` first (Google Sheets and Excel put `<table>` markup on the clipboard), parses with Python's built-in `html.parser`. Falls back to `text/plain` tab-separated values, then `text/rtf`, then checks for images.
 3. **Writing text (`clipboard_copy`):** On Linux/macOS, pipes text to the platform's clipboard write command (`wl-copy`, `xclip -selection clipboard`, `pbcopy`). On Windows, calls the Win32 clipboard API directly via pywin32 (`SetClipboardData` under `CF_UNICODETEXT` for text/plain; under registered `HTML Format` / `Rich Text Format` / `image/svg+xml` for typed content). Supports a `mime_type` parameter for writing typed content (e.g. `text/html`, `text/rtf`, `image/svg+xml`).
 4. **Writing images (`clipboard_copy_image`):** Decodes base64 PNG or JPEG bytes and writes them to the platform's clipboard via `wl-copy --type`, `xclip -target`, NSPasteboard `setData:forType:` (macOS), or PowerShell `Clipboard::SetImage` (Windows; transitioning to pywin32 in a follow-up PR, see #147). Magic bytes are validated against the declared MIME type before any subprocess runs.
@@ -364,7 +364,7 @@ If you have access to a custom system prompt (e.g. in a Claude Desktop project o
 
 * **Audio and video are not supported.** If the clipboard contains audio or video, the server reports the format but cannot return the content.
 * **Image write supports PNG and JPEG only via `clipboard_copy_image`.** Pass-through, no re-encoding. Other binary formats (GIF, WebP, TIFF, BMP) are not yet writable. SVG rides the typed-text path via `clipboard_copy(mime_type="image/svg+xml")` since SVG is XML.
-* **Writing multiple MIME types atomically is not supported** on Wayland/X11. `wl-copy` and `xclip` carry a single MIME per invocation, so `clipboard_copy_markdown` writes only `text/html` on those platforms. On Wayland, `wl-copy` auto-advertises `text/plain` for UTF-8 content but the bytes returned are the rendered HTML markup (not the markdown source) — vim users pasting after the tool runs will see `<h1>...` etc. On X11, plain-text targets see an empty clipboard. For a plain-text paste of the markdown source, call `clipboard_copy(markdown_source)` directly. macOS and Windows do support atomic multi-format writes via NSPasteboard / `DataObject`.
+* **Writing multiple MIME types atomically is not supported** on Wayland/X11. `wl-copy` and `xclip` carry a single MIME per invocation, so `clipboard_copy_markdown` writes only `text/html` on those platforms. On Wayland, `wl-copy` auto-advertises `text/plain` for UTF-8 content but the bytes returned are the rendered HTML markup (not the markdown source) — vim users pasting after the tool runs will see `<h1>...` etc. On X11, plain-text targets see an empty clipboard. For a plain-text paste of the markdown source, call `clipboard_copy(markdown_source)` directly. macOS and Windows do support atomic multi-format writes: NSPasteboard on macOS, and on Windows one `OpenClipboard` ... `CloseClipboard` transaction with a `SetClipboardData` call per format.
 * **Text content is truncated at 50KB** to avoid overwhelming the model's context window.
 * **Platform coverage is uneven.** Linux with Wayland is tested and actively used. Windows has been exercised end-to-end on a QEMU Windows guest as of v2.5.x (which surfaced and resolved a Windows-only UTF-8 stdin encoding bug, [#129](https://github.com/cmeans/mcp-clipboard/issues/129)). X11 and macOS implementations are complete and have unit tests but have not been verified beyond that. Bug reports and PRs are welcome, especially for X11 and macOS.
 

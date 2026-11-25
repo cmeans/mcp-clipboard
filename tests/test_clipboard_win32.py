@@ -282,7 +282,7 @@ def test_open_clipboard_creates_message_only_window(clipboard_win32, fake_win32c
     """The HWND we pass to OpenClipboard comes from CreateWindowEx with
     class='STATIC' (built-in USER32 class, no registration needed) and
     parent=HWND_MESSAGE (top-level message-only window, never visible).
-    Same pattern pyperclip and Chromium's base::win::MessageWindow use."""
+    Chromium's base::win::MessageWindow is also a message-only window."""
     fake_win32clipboard.OpenClipboard.return_value = None
 
     clipboard_win32._open_clipboard_with_retry(fake_win32clipboard, retries=3, delay_ms=0)
@@ -674,8 +674,8 @@ def test_allocate_hglobal_frees_handle_on_lock_failure(clipboard_win32, fake_win
 def test_write_payloads_single_format_full_transaction(clipboard_win32, fake_win32clipboard):
     """Happy path for one format: OpenClipboard, EmptyClipboard,
     GlobalAlloc + lock/copy/unlock, SetClipboardData, CloseClipboard.
-    No retry, no verify, no pump -- the canonical Win32 sequence
-    matching Chromium / Qt / clipboard-win."""
+    No retry, no verify, no pump -- the sequence Microsoft documents
+    for SetClipboardData."""
     import ctypes as _ctypes
 
     kernel32 = _ctypes.windll.kernel32  # type: ignore[attr-defined]
@@ -790,11 +790,9 @@ def test_write_payloads_frees_handles_when_open_clipboard_exhausts(
 
 def test_write_payloads_no_post_write_verify(clipboard_win32, fake_win32clipboard):
     """Architectural invariant: there is NO post-write
-    IsClipboardFormatAvailable verify. This matches Chromium, Qt,
-    clipboard-win, pyperclip, pyclip, and .NET WinForms (whose 10x100ms
-    retry is on the OpenClipboard side, not on post-write verify).
-    A prior revision (commit 75bcb0f) added a verify-retry tax;
-    QEMU testing showed it made the race STRICTLY WORSE under active
+    IsClipboardFormatAvailable verify (.NET WinForms' 10x100ms retry is
+    on the OpenClipboard side, not a post-write verify). A verify-retry
+    was tried during #146; QEMU testing showed it made the race STRICTLY WORSE under active
     chain observers (race-bucket went 4/6 to 0/6 PASS) because each
     verify pair generates an additional WM_CLIPBOARDUPDATE
     notification that amplifies observer contention. The verify-retry
@@ -821,8 +819,8 @@ def test_write_payloads_no_post_write_verify(clipboard_win32, fake_win32clipboar
 
 def test_write_payloads_no_seq_number_sampling(clipboard_win32, fake_win32clipboard):
     """Architectural invariant: the write path must NOT call
-    GetClipboardSequenceNumber. A prior revision (commit ab05aef)
-    added a passive seq-number canary bracketing the transaction as
+    GetClipboardSequenceNumber. A passive seq-number canary tried
+    during #146 bracketed bracketing the transaction as
     an observation-only diagnostic. QEMU re-test with chain observers
     DISABLED showed the canary itself measurably degraded the race
     posture: 0/6 race-bucket PASS vs the canary-free 6/6 baseline on

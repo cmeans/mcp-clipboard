@@ -170,7 +170,8 @@ async def _read_clipboard_content(
     """Read clipboard and attempt to extract tabular data.
 
     Returns (rows, html, text) where rows may be empty if no table found.
-    html and text are the raw clipboard content (may be empty on error).
+    html is the clipboard HTML with any Windows CF_HTML header stripped;
+    text is the plain-text content. Either may be empty on error.
     """
     rows: list[list[str]] = []
     html = ""
