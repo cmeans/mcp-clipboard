@@ -95,8 +95,8 @@ def test_html_roundtrip_carries_cf_html_wrapper():
     """text/html is stored as the CF_HTML wrapper format -- Version + offsets
     + body. _windows_write_typed wraps the content via _windows_html_clipboard_wrap
     before handing to clipboard_win32. The read side returns the wrapper bytes
-    decoded UTF-8; the parser layer in server.py is what extracts the body
-    fragment from the offsets."""
+    decoded UTF-8, header included; clipboard_paste strips the header with
+    parser.strip_cf_html_header before parsing."""
     from mcp_clipboard.clipboard import _windows_html_clipboard_wrap
 
     _reset_clipboard()
@@ -125,8 +125,8 @@ def test_rtf_roundtrip():
 
 def test_svg_roundtrip_after_text_state():
     """SVG copy after a text-only clipboard -- the case the PowerShell
-    backend silently no-opped on (mc-005, mc-020). With the single-process
-    Win32 backend there is no cross-process propagation race to lose."""
+    backend silently no-opped on (mc-005, mc-020). The single-process Win32
+    backend has no reader subprocess to miss the write."""
     _reset_clipboard()
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
@@ -193,7 +193,8 @@ def test_list_formats_after_svg_write_includes_custom_format():
 def test_list_formats_after_multi_write_includes_html_and_text():
     """The MCP-visible regression #143 reported (mc-005 / mc-020) was that
     the next list_formats call after a non-text/plain write did not see the
-    new format. The single-process Win32 backend does not have that race."""
+    new format. The single-process Win32 backend has no reader subprocess
+    to miss it."""
     from mcp_clipboard.clipboard import _windows_html_clipboard_wrap
 
     _reset_clipboard()

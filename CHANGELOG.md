@@ -16,7 +16,22 @@ All notable changes to this project will be documented here.
   new `tests/test_clipboard_win32_integration.py` suite (round-trips
   text/plain with non-ASCII, text/html, text/rtf, image/svg+xml,
   multi-format atomic writes, list_formats; the tests self-skip on
-  non-Windows so they are harmless on local Linux pytest runs).
+  non-Windows so they are harmless on local Linux pytest runs). (#146)
+- **Windows clipboard-observers control script.**
+  `dev/windows-clipboard-observers.ps1` disables the documented Windows
+  clipboard chain observers (`cbdhsvc` Clipboard History service, Cloud
+  Clipboard sync, Suggested Actions text extractor) for users who need
+  zero-flake clipboard behavior. The script captures current state,
+  applies test values, and `-Mode Restore` puts back the values it
+  captured. The race the script works around is the asynchronously-posted `WM_CLIPBOARDUPDATE`
+  notification on Windows 11 (per [Microsoft Q&A 1327362](https://learn.microsoft.com/en-us/answers/questions/1327362/wm-clipboardupdate-issue)),
+  which lets observers re-open the clipboard immediately after our
+  `CloseClipboard` and overwrite our content. This is the same race
+  every mature Windows clipboard library lives with (Chromium, Qt,
+  clipboard-win, pyperclip, .NET WinForms) and has no published fix.
+  We empirically confirmed the script eliminates the symptom: with
+  observers off the QEMU e2e suite goes from 24/28 PASS to 27/28
+  PASS with zero first-attempt race recoveries. (#146)
 
 ### Changed
 - **Windows backend rewritten on top of `pywin32`.** Earlier versions
@@ -45,25 +60,12 @@ All notable changes to this project will be documented here.
   as a Windows-only dependency (`sys_platform == 'win32'` marker).
   Phase 1 covers text formats (text/plain, text/html, text/rtf,
   image/svg+xml); image read/write stays on PowerShell until Phase 2
-  (#147) ports it with DIB <-> PNG conversion. Closes #143.
+  (#147) ports it with DIB <-> PNG conversion. `clipboard_paste` strips
+  the CF_HTML header (`Version:`, `StartHTML:` and the other offsets)
+  from Windows HTML before parsing, so it no longer reaches the model
+  as text; `clipboard_read_raw` still returns the stored bytes as they
+  are. (#146), closes #143
 - **Bump github-actions group: actions/create-github-app-token 3.3.0→3.4.0** (#166)
-
-### Fixed
-- Windows: added a control script (`dev/windows-clipboard-observers.ps1`)
-  to disable the documented Windows clipboard chain observers
-  (`cbdhsvc` Clipboard History service, Cloud Clipboard sync, Suggested
-  Actions text extractor) for users who need zero-flake clipboard
-  behavior. The script captures current state, applies test values,
-  and restores cleanly on `-Mode Restore`. The race the script
-  works around is the asynchronously-posted `WM_CLIPBOARDUPDATE`
-  notification on Windows 11 (per [Microsoft Q&A 1327362](https://learn.microsoft.com/en-us/answers/questions/1327362/wm-clipboardupdate-issue)),
-  which lets observers re-open the clipboard immediately after our
-  `CloseClipboard` and overwrite our content. This is the same race
-  every mature Windows clipboard library lives with (Chromium, Qt,
-  clipboard-win, pyperclip, .NET WinForms) and has no published fix.
-  We empirically confirmed the script eliminates the symptom: with
-  observers off the QEMU e2e suite goes from 24/28 PASS to 27/28
-  PASS with zero first-attempt race recoveries.
 
 ## [2.6.3] - 2026-10-19
 

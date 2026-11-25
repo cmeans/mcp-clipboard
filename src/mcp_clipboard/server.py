@@ -45,6 +45,7 @@ from .parser import (
     infer_column_types,
     parse_html_table,
     parse_tsv,
+    strip_cf_html_header,
 )
 
 logger = logging.getLogger(__name__)
@@ -177,7 +178,7 @@ async def _read_clipboard_content(
 
     # Strategy 1: Try HTML clipboard (most reliable for spreadsheets)
     try:
-        html = await read_clipboard("text/html", selection)
+        html = strip_cf_html_header(await read_clipboard("text/html", selection))
         if html:
             rows = parse_html_table(html)
     except ClipboardError as e:

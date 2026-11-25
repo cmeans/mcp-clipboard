@@ -445,6 +445,39 @@ async def test_paste_html_without_table():
 
 
 @pytest.mark.asyncio
+async def test_paste_windows_cf_html_header_not_shown():
+    """On Windows, text/html reads back with the CF_HTML header (Version,
+    StartHTML, ... offsets). clipboard_paste must not show that header."""
+    from mcp_clipboard.clipboard import _windows_html_clipboard_wrap
+
+    html = _windows_html_clipboard_wrap("<p>Hello <b>world</b></p>")
+    with patch(
+        "mcp_clipboard.server.read_clipboard",
+        side_effect=_mock_read(html=html, text="Hello world"),
+    ):
+        result = await clipboard_paste()
+
+    assert "Hello world" in result
+    for key in ("Version:", "StartHTML:", "EndHTML:", "StartFragment:", "EndFragment:"):
+        assert key not in result
+
+
+@pytest.mark.asyncio
+async def test_paste_windows_cf_html_table_still_parsed():
+    """A table inside a CF_HTML wrapper still parses after the header is stripped."""
+    from mcp_clipboard.clipboard import _windows_html_clipboard_wrap
+
+    with patch(
+        "mcp_clipboard.server.read_clipboard",
+        side_effect=_mock_read(html=_windows_html_clipboard_wrap(SAMPLE_HTML)),
+    ):
+        result = await clipboard_paste()
+
+    assert "|" in result
+    assert "Version:" not in result
+
+
+@pytest.mark.asyncio
 async def test_paste_empty_clipboard():
     """clipboard_paste returns empty message when clipboard is empty."""
     with patch("mcp_clipboard.server.read_clipboard", side_effect=_mock_read(html="", text="")):

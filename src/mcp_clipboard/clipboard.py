@@ -445,8 +445,9 @@ async def _macos_list_formats(selection: str = "clipboard") -> list[str]:
 # The new backend keeps clipboard ownership inside the long-lived MCP-server
 # Python process. Each clipboard op is a synchronous Win32 OpenClipboard ->
 # Empty/Set/Get -> CloseClipboard transaction in our address space, dispatched
-# off the asyncio loop via asyncio.to_thread. No subprocess spawn, no codepage
-# transcoding, no cross-process race.
+# off the asyncio loop via asyncio.to_thread. No subprocess spawn and no codepage
+# transcoding. Clipboard chain observers can still overwrite a write after
+# CloseClipboard (see clipboard_win32.py).
 #
 # See clipboard_win32.py for the wrapper module (imported at the top of the
 # file as `_w32`).

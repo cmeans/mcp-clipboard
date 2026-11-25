@@ -180,11 +180,40 @@ def test_import_win32clipboard_returns_module_when_available(clipboard_win32, fa
 def test_import_win32clipboard_raises_clear_error_on_non_windows():
     """When pywin32 is not installed (Linux / macOS) the import raises
     ImportError with a message naming the platform constraint."""
-    with patch.dict(sys.modules, {"win32clipboard": None}):
+    with patch.dict(sys.modules, {"win32clipboard": None}), patch.object(sys, "platform", "linux"):
         from mcp_clipboard import clipboard_win32 as mod
 
-        with pytest.raises(ImportError, match="pywin32"):
+        with pytest.raises(ImportError, match="only installed on Windows"):
             mod._import_win32clipboard()
+
+
+def test_import_win32clipboard_keeps_real_cause_on_windows():
+    """On Windows pywin32 is a declared dependency, so an ImportError is a
+    broken install. The message must carry the real cause (e.g. "DLL load
+    failed") and must not claim the host is not Windows."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "win32clipboard":
+            raise ImportError("DLL load failed while importing win32clipboard")
+        return real_import(name, *args, **kwargs)
+
+    from mcp_clipboard import clipboard_win32 as mod
+
+    with (
+        patch.dict(sys.modules),
+        patch.object(sys, "platform", "win32"),
+        patch.object(builtins, "__import__", fake_import),
+    ):
+        sys.modules.pop("win32clipboard", None)
+        with pytest.raises(ImportError) as excinfo:
+            mod._import_win32clipboard()
+
+    message = str(excinfo.value)
+    assert "DLL load failed" in message
+    assert "non-Windows" not in message
 
 
 # --- _register_format ------------------------------------------------------
@@ -543,6 +572,7 @@ def test_allocate_hglobal_locks_copies_unlocks_in_order(clipboard_win32, fake_wi
 
     assert call_order == ["alloc", "lock", "unlock"]
     assert handle == 0xCAFE
+    _ctypes.memmove.assert_called_once_with(0xBEEF, b"payload", 7)  # type: ignore[attr-defined]
     kernel32.GlobalLock.assert_called_once_with(0xCAFE)
     kernel32.GlobalUnlock.assert_called_once_with(0xCAFE)
 
@@ -577,6 +607,35 @@ def test_allocate_hglobal_empty_payload_uses_size_one(clipboard_win32, fake_win3
     clipboard_win32._allocate_hglobal(b"")
 
     assert kernel32.GlobalAlloc.call_args.args[1] == 1
+
+
+def test_allocate_hglobal_empty_payload_is_zero_initialized(clipboard_win32, fake_win32clipboard):
+    """The one byte allocated for an empty payload gets nothing copied
+    into it, so it must be allocated zeroed (GMEM_MOVEABLE | GMEM_ZEROINIT):
+    an empty RTF / SVG write then reads back as "" rather than one
+    uninitialized byte. Non-empty payloads keep plain GMEM_MOVEABLE."""
+    import ctypes as _ctypes
+
+    kernel32 = _ctypes.windll.kernel32  # type: ignore[attr-defined]
+    kernel32.GlobalAlloc.return_value = 0xA1
+    kernel32.GlobalLock.return_value = 0xB1
+
+    clipboard_win32._allocate_hglobal(b"")
+    assert kernel32.GlobalAlloc.call_args.args[0] == 0x0042
+    _ctypes.memmove.assert_not_called()  # type: ignore[attr-defined]
+
+    clipboard_win32._allocate_hglobal(b"x")
+    assert kernel32.GlobalAlloc.call_args.args[0] == 0x0002
+
+
+def test_open_clipboard_retry_defaults_are_pinned(clipboard_win32):
+    """The default retry budget (10 attempts, 50 ms apart) is part of the
+    documented contention behavior; pin it so a change is deliberate."""
+    import inspect
+
+    params = inspect.signature(clipboard_win32._open_clipboard_with_retry).parameters
+    assert params["retries"].default == 10
+    assert params["delay_ms"].default == 50
 
 
 def test_allocate_hglobal_raises_memoryerror_on_alloc_failure(clipboard_win32, fake_win32clipboard):

@@ -21,8 +21,9 @@ of this server. The subprocess approach had two structural problems:
 
 This module keeps clipboard ownership inside the long-lived MCP-server
 Python process. All clipboard operations happen synchronously in our own
-address space. No subprocess spawn, no codepage transcoding, no
-cross-process race.
+address space. No subprocess spawn and no codepage transcoding. Each
+write is atomic between OpenClipboard and CloseClipboard; clipboard
+chain observers can still overwrite it afterward (see below).
 
 **Write path: raw SetClipboardData with GlobalAlloc(GMEM_MOVEABLE) HGLOBALs.**
 This is the canonical Win32 clipboard write pattern used by Chromium
@@ -100,7 +101,8 @@ non-NULL but no consumer can read the format -- the same silent
 no-op symptom). pywin32's high-level `SetClipboardData(fmt, bytes)`
 wrapper does allocate GMEM_MOVEABLE internally, so the silent no-op
 seen on the pre-OLE write path (before this rewrite) was a separate
-bug -- the lazy-init HWND-creation race fixed in commit 6d306c7.
+bug -- the clipboard-owner window problem fixed in commit 25b2b49
+(use a process-owned message-only window).
 
 **Read path: OpenClipboard + GetClipboardData.** Unchanged from
 earlier revisions. OLE was never required for reads; only the
@@ -117,6 +119,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import sys
 import threading
 import time
 from typing import Any
@@ -159,6 +162,7 @@ logger = logging.getLogger(__name__)
 # `CreateGlobalData()` byte-for-byte except for the language.
 
 _GMEM_MOVEABLE = 0x0002
+_GMEM_ZEROINIT = 0x0040
 
 
 def _kernel32() -> Any:
@@ -198,14 +202,16 @@ def _allocate_hglobal(payload: bytes) -> int:
     """
     kernel32 = _kernel32()
     # GlobalAlloc(GMEM_MOVEABLE, 0) is well-defined but pointless; round
-    # up to 1 byte so SetClipboardData has a real handle to take. The
-    # one byte is uninitialized for size 0, which is fine -- callers
-    # that publish an empty payload aren't reading it back.
+    # up to 1 byte so SetClipboardData has a real handle to take. That
+    # byte gets no payload copied into it, so allocate it zeroed: an
+    # empty RTF / SVG write then reads back as "" (read_text strips a
+    # trailing NUL) instead of one uninitialized byte.
     size = len(payload) if payload else 1
-    handle = kernel32.GlobalAlloc(_GMEM_MOVEABLE, size)
+    flags = _GMEM_MOVEABLE if payload else _GMEM_MOVEABLE | _GMEM_ZEROINIT
+    handle = kernel32.GlobalAlloc(flags, size)
     if not handle:
         raise MemoryError(
-            f"GlobalAlloc(GMEM_MOVEABLE, {size}) returned NULL (out of global memory)."
+            f"GlobalAlloc({flags:#06x}, {size}) returned NULL (out of global memory)."
         )
     locked = kernel32.GlobalLock(handle)
     if not locked:
@@ -401,6 +407,14 @@ def _import_win32clipboard() -> Any:
         # (import-untyped) without taking on the stub package.
         import win32clipboard  # type: ignore[import-not-found,import-untyped]
     except ImportError as exc:
+        if sys.platform == "win32":
+            # On Windows, pywin32 is a declared dependency, so an
+            # ImportError here is a broken install (e.g. "DLL load
+            # failed"). Keep the real cause in the message.
+            raise ImportError(
+                f"pywin32 failed to import ({exc}). It is a dependency of "
+                "mcp-clipboard on Windows; reinstall mcp-clipboard to repair it."
+            ) from exc
         raise ImportError(
             "clipboard_win32 requires pywin32, which is only installed on "
             "Windows. This module should not be invoked on non-Windows hosts."
@@ -473,9 +487,9 @@ def read_text(mime_type: str) -> str:
 
     text/html reads the registered "HTML Format"; the bytes are the
     full CF_HTML wrapper (Version + offsets + body) encoded UTF-8.
-    Returned as the decoded UTF-8 string -- the parser layer in
-    server.py extracts the body fragment from between the StartFragment
-    / EndFragment offsets.
+    Returned as the decoded UTF-8 string, header included, so
+    clipboard_read_raw shows it as stored. clipboard_paste strips the
+    header (parser.strip_cf_html_header) before parsing.
 
     text/rtf and image/svg+xml read their registered custom format
     strings; bytes are UTF-8 source.
@@ -622,8 +636,9 @@ def write_text(content: str, mime_type: str) -> None:
 
     Atomic via OpenClipboard + EmptyClipboard + SetClipboardData +
     CloseClipboard. The previous clipboard owner is fully replaced
-    before this function returns; no propagation window or chain-
-    settle race.
+    before this function returns. Clipboard chain observers can still
+    overwrite the content after CloseClipboard (see the module
+    docstring).
     """
     win32clipboard = _import_win32clipboard()
     fmt_id = _format_id_for_mime(win32clipboard, mime_type)
